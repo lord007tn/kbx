@@ -73,6 +73,10 @@ Tools exposed:
 - `kbx_get_chunk`
 - `kbx_index_status`
 
+`kbx_search` returns previews, chunk IDs, source citations, scores, and match type. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes a `kbx_usage` prompt and `kbx://usage` resource with agent guidance.
+
+See [docs/agent-usage.md](docs/agent-usage.md) for Claude/Codex/Cursor style usage guidance.
+
 ## Current Scope
 
 This is pre-release alpha scope. The CLI is usable for local development and smoke testing, but npm publishing, standalone binaries, and broader distribution hardening are still pending.
@@ -86,6 +90,7 @@ Implemented:
 - ingest policy overrides with `--include`, `--exclude`, and `--no-gitignore`
 - heading-aware Markdown chunking and fixed text/code chunking
 - Zvec-backed local vector collection
+- hybrid vector and lexical retrieval
 - Transformers.js embeddings with a hash test embedder
 - model catalog list/use/benchmark
 - init-time model selection with `--model`

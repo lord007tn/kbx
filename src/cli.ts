@@ -9,6 +9,7 @@ import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIn
 import { runMcpServer } from "./mcp";
 import { MODEL_CATALOG, resolveModel } from "./models";
 import { searchWorkspace } from "./search";
+import { KBX_VERSION } from "./version";
 import { watchIngest } from "./watch";
 import {
   deleteWorkspaceKnowledgeBase,
@@ -33,7 +34,7 @@ program
   .name("kbx")
   .description("Local-first knowledge base CLI for searchable AI context.")
   .summary("Index a workspace into .kbx/ and retrieve local chunks for AI assistants.")
-  .version("0.1.0")
+  .version(KBX_VERSION)
   .showHelpAfterError()
   .addHelpText("after", `
 

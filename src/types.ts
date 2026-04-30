@@ -87,6 +87,7 @@ export interface SearchHit {
   chunk_idx: number;
   score: number;
   text: string;
+  match: "vector" | "lexical" | "hybrid";
 }
 
 export interface ChunkDetail {

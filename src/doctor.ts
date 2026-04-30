@@ -31,7 +31,7 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
       {
         ok: false,
         label: "workspace",
-        detail: "No .kbx/ found. Run kbx init."
+        detail: "No .kbx/ found. Run kbx init, or run kbx init --git-root from inside a repository."
       }
     ];
   }
@@ -59,7 +59,7 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
 
   const registry = await loadRegistry();
   const registered = registry.some((entry) => entry.workspace_id === manifest.workspace_id);
-  lines.push({ ok: registered, label: "registry", detail: registered ? "registered" : "missing entry" });
+  lines.push({ ok: registered, label: "registry", detail: registered ? "registered" : "missing entry; run kbx init from this workspace to repair registration" });
 
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
   lines.push({
@@ -76,10 +76,12 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
       store.close();
     }
   } catch (error) {
-    lines.push({ ok: false, label: "collection", detail: error instanceof Error ? error.message : String(error) });
+    const detail = error instanceof Error ? error.message : String(error);
+    lines.push({ ok: false, label: "collection", detail: `${detail}; run kbx ingest to create it, or kbx reset --yes then kbx ingest if it is corrupt` });
   }
 
-  lines.push({ ok: true, label: "model", detail: `${manifest.model} (${manifest.dim}d)` });
+  lines.push({ ok: true, label: "model", detail: `${manifest.model} (${manifest.dim}d); run kbx model benchmark to verify local embedding performance` });
+  lines.push({ ok: true, label: "mcp", detail: `stdio server available via: {"command":"kbx","args":["mcp"]}` });
 
   if (options.fresh) {
     lines.push(await freshnessLine(workspace, stats));
@@ -128,7 +130,7 @@ export async function freshnessLine(workspace: Workspace, stats: IndexStats): Pr
   return {
     ok,
     label: "freshness",
-    detail: `${stale} stale, ${deleted} deleted, ${newFiles} new`
+    detail: `${stale} stale, ${deleted} deleted, ${newFiles} new${ok ? "" : "; run kbx ingest to refresh the index"}`
   };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "kbx",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local-first knowledge base CLI for searchable AI context.",
   "license": "MIT",
   "keywords": [
