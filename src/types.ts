@@ -47,15 +47,24 @@ export interface ChunkRecord {
   source_origin: "workspace";
   chunk_idx: number;
   mtime: number;
+  tags: string;
+}
+
+export interface EmbeddedChunkRecord extends ChunkRecord {
   embedding: number[];
 }
 
-export interface IndexFile {
+export interface IndexedFileStats {
+  mtime: number;
+  chunks: number;
+}
+
+export interface IndexStats {
   schema_version: number;
   model: string;
   dim: number;
   last_ingest_at: string;
-  chunks: ChunkRecord[];
+  files: Record<string, IndexedFileStats>;
 }
 
 export interface SearchHit {

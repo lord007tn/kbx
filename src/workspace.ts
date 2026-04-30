@@ -19,7 +19,8 @@ export interface Workspace {
   manifestPath: string;
   configPath: string;
   sourcesPath: string;
-  indexPath: string;
+  statsPath: string;
+  collectionDir: string;
 }
 
 export const defaultConfig: WorkspaceConfig = {
@@ -42,7 +43,8 @@ export function workspaceFromRoot(root: string): Workspace {
     manifestPath: path.join(kbxDir, "manifest.json"),
     configPath: path.join(kbxDir, "config.json"),
     sourcesPath: path.join(kbxDir, "sources.json"),
-    indexPath: path.join(kbxDir, "index.json")
+    statsPath: path.join(kbxDir, "stats.json"),
+    collectionDir: path.join(kbxDir, "collection")
   };
 }
 

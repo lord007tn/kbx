@@ -2,9 +2,10 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { Command } from "commander";
 import path from "node:path";
-import { ingestWorkspaceTarget } from "./indexer.js";
+import { ingestWorkspaceTarget, loadIndexStats } from "./indexer.js";
 import { searchWorkspace } from "./search.js";
 import { findWorkspace, initWorkspace, loadManifest, registryPath, workspaceFromRoot } from "./workspace.js";
+import { ChunkVectorStore } from "./vector-store.js";
 
 const program = new Command();
 
@@ -36,7 +37,7 @@ program
 
     const absoluteTarget = path.resolve(targetPath);
     const result = await ingestWorkspaceTarget(workspace, absoluteTarget);
-    console.log(`Indexed ${result.files} markdown file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s).`);
+    console.log(`Indexed ${result.files} markdown file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
   });
 
 program
@@ -72,8 +73,23 @@ program
       throw new Error("No kbx workspace found. Run kbx init first.");
     }
     const manifest = await loadManifest(workspace);
+    const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+    let chunkCount = 0;
+    try {
+      const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
+      try {
+        chunkCount = store.docCount;
+      } finally {
+        store.close();
+      }
+    } catch {
+      chunkCount = 0;
+    }
     console.log(`Workspace: ${manifest.name} (${manifest.workspace_id.slice(0, 8)})`);
     console.log(`Model: ${manifest.model} (${manifest.dim}d)`);
+    console.log(`Documents: ${Object.keys(stats.files).length}`);
+    console.log(`Chunks: ${chunkCount}`);
+    console.log(`Last ingest: ${stats.last_ingest_at || "never"}`);
     console.log(`Registry: ${registryPath()}`);
   });
 

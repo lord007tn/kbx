@@ -4,12 +4,14 @@ import { listMarkdownFiles } from "./files.js";
 import { readJson, writeJson } from "./io.js";
 import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace.js";
 import { normalizeSources, sourceForTarget } from "./sources.js";
-import { SCHEMA_VERSION, type ChunkRecord, type IndexFile } from "./types.js";
+import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats } from "./types.js";
+import { ChunkVectorStore } from "./vector-store.js";
 
 export interface IngestResult {
   files: number;
   chunks: number;
   skipped: number;
+  deleted: number;
 }
 
 export async function ingestWorkspaceTarget(workspace: Workspace, target: string): Promise<IngestResult> {
@@ -22,75 +24,109 @@ export async function ingestWorkspaceTarget(workspace: Workspace, target: string
   const sources = normalizeSources([...existingSources, source]);
   await saveSources(workspace, sources);
 
-  const existingIndex = await loadIndexIfPresent(workspace);
-  const retainedChunks = existingIndex.chunks.filter((chunk) => !chunk.source.startsWith(source.path === "." ? "" : `${source.path}/`) && chunk.source !== source.path);
+  const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
   const files = await listMarkdownFiles(workspace.root, source.path);
+  const currentFilePaths = new Set(files.map((file) => file.relativePath));
   const embedder = createEmbedder(manifest.model, manifest.dim);
-  const chunksToEmbed: Omit<ChunkRecord, "embedding">[] = [];
+  const store = await ChunkVectorStore.open(workspace, manifest.dim);
+  const chunksToEmbed: ChunkRecord[] = [];
   let skipped = 0;
+  let deleted = 0;
 
-  for (const file of files) {
-    const existingForFile = existingIndex.chunks.filter((chunk) => chunk.source === file.relativePath);
-    if (existingForFile.length > 0 && existingForFile.every((chunk) => chunk.mtime === file.mtime)) {
-      skipped += 1;
-      retainedChunks.push(...existingForFile);
-      continue;
+  try {
+    for (const filePath of Object.keys(stats.files)) {
+      if (isCoveredBySource(source.path, filePath) && !currentFilePaths.has(filePath)) {
+        store.deleteSource(filePath);
+        delete stats.files[filePath];
+        deleted += 1;
+      }
     }
 
-    const textChunks = chunkMarkdown({
-      source: file.relativePath,
-      content: file.content,
-      maxChars: config.chunk.size,
-      overlapChars: config.chunk.overlap
-    });
+    for (const file of files) {
+      const existingFile = stats.files[file.relativePath];
+      if (existingFile && existingFile.mtime === file.mtime) {
+        skipped += 1;
+        continue;
+      }
 
-    for (const chunk of textChunks) {
-      chunksToEmbed.push({
-        id: chunk.id,
-        text: chunk.text,
+      store.deleteSource(file.relativePath);
+
+      const textChunks = chunkMarkdown({
         source: file.relativePath,
-        human_source: file.relativePath,
-        citation_source: file.relativePath,
-        source_origin: "workspace",
-        chunk_idx: chunk.chunk_idx,
-        mtime: file.mtime
+        content: file.content,
+        maxChars: config.chunk.size,
+        overlapChars: config.chunk.overlap
       });
+
+      for (const chunk of textChunks) {
+        chunksToEmbed.push({
+          id: chunk.id,
+          text: chunk.text,
+          source: file.relativePath,
+          human_source: file.relativePath,
+          citation_source: file.relativePath,
+          source_origin: "workspace",
+          chunk_idx: chunk.chunk_idx,
+          mtime: file.mtime,
+          tags: ""
+        });
+      }
+
+      stats.files[file.relativePath] = {
+        mtime: file.mtime,
+        chunks: textChunks.length
+      };
     }
+
+    const embeddings = chunksToEmbed.length > 0 ? await embedder.embed(chunksToEmbed.map((chunk) => chunk.text)) : [];
+    const embeddedChunks: EmbeddedChunkRecord[] = chunksToEmbed.map((chunk, index) => ({
+      ...chunk,
+      embedding: embeddings[index] ?? []
+    }));
+    store.upsertChunks(embeddedChunks);
+
+    const nextStats: IndexStats = {
+      schema_version: SCHEMA_VERSION,
+      model: manifest.model,
+      dim: manifest.dim,
+      last_ingest_at: new Date().toISOString(),
+      files: stats.files
+    };
+    await writeJson(workspace.statsPath, nextStats);
+    await touchManifest(workspace);
+
+    return {
+      files: files.length,
+      chunks: embeddedChunks.length,
+      skipped,
+      deleted
+    };
+  } finally {
+    store.close();
   }
-
-  const embeddings = chunksToEmbed.length > 0 ? await embedder.embed(chunksToEmbed.map((chunk) => chunk.text)) : [];
-  const embeddedChunks = chunksToEmbed.map((chunk, index) => ({
-    ...chunk,
-    embedding: embeddings[index] ?? []
-  }));
-
-  const nextIndex: IndexFile = {
-    schema_version: SCHEMA_VERSION,
-    model: manifest.model,
-    dim: manifest.dim,
-    last_ingest_at: new Date().toISOString(),
-    chunks: [...retainedChunks, ...embeddedChunks].sort((a, b) => a.source.localeCompare(b.source) || a.chunk_idx - b.chunk_idx)
-  };
-  await writeJson(workspace.indexPath, nextIndex);
-  await touchManifest(workspace);
-
-  return {
-    files: files.length,
-    chunks: embeddedChunks.length,
-    skipped
-  };
 }
 
-async function loadIndexIfPresent(workspace: Workspace): Promise<IndexFile> {
+export async function loadIndexStats(workspace: Workspace, model: string, dim: number): Promise<IndexStats> {
   try {
-    return await readJson<IndexFile>(workspace.indexPath);
-  } catch {
+    const stats = await readJson<IndexStats>(workspace.statsPath);
+    if (stats.model !== model || stats.dim !== dim) {
+      throw new Error("Index stats model does not match workspace manifest. Re-run kbx ingest after resetting the collection.");
+    }
+    return stats;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("does not match")) {
+      throw error;
+    }
     return {
       schema_version: SCHEMA_VERSION,
-      model: "",
-      dim: 0,
+      model,
+      dim,
       last_ingest_at: "",
-      chunks: []
+      files: {}
     };
   }
+}
+
+function isCoveredBySource(sourcePath: string, filePath: string): boolean {
+  return sourcePath === "." || filePath === sourcePath || filePath.startsWith(`${sourcePath}/`);
 }
