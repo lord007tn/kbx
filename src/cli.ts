@@ -9,6 +9,7 @@ import { ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceInde
 import { runMcpServer } from "./mcp.js";
 import { MODEL_CATALOG, resolveModel } from "./models.js";
 import { searchWorkspace } from "./search.js";
+import { watchIngest } from "./watch.js";
 import {
   deleteWorkspaceKnowledgeBase,
   findWorkspace,
@@ -47,7 +48,8 @@ program
   .command("ingest")
   .description("Index text-like files in this workspace.")
   .argument("[path]", "workspace path to ingest", ".")
-  .action(async (targetPath: string) => {
+  .option("--watch", "watch sources and refresh changed files")
+  .action(async (targetPath: string, options: { watch?: boolean }) => {
     const workspace = await findWorkspace(process.cwd()) ?? await maybeInitWorkspace();
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
@@ -56,6 +58,10 @@ program
     const absoluteTarget = path.resolve(targetPath);
     const result = await ingestWorkspaceTarget(workspace, absoluteTarget);
     console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
+
+    if (options.watch === true) {
+      await watchIngest(workspace, absoluteTarget);
+    }
   });
 
 program

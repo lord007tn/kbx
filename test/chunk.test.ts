@@ -46,3 +46,17 @@ test("chunkMarkdown starts overlapped chunks on word boundaries", () => {
     assert.doesNotMatch(chunk.text, /^[a-z]{1,2}\s/);
   }
 });
+
+test("chunkMarkdown prefers heading sections before fixed splitting", () => {
+  const chunks = chunkMarkdown({
+    source: "notes/headings.md",
+    content: "# One\n\nalpha\n\n## Two\n\nbeta",
+    maxChars: 800,
+    overlapChars: 100
+  });
+
+  assert.equal(chunks.length, 2);
+  assert.equal(chunks[0]?.text.includes("# One"), true);
+  assert.equal(chunks[0]?.text.includes("## Two"), false);
+  assert.equal(chunks[1]?.chunk_idx, 1);
+});

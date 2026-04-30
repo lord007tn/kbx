@@ -16,10 +16,26 @@ export interface TextChunk {
 }
 
 export function chunkMarkdown(input: ChunkInput): TextChunk[] {
-  return chunkText({
-    ...input,
-    stripFrontmatter: true
-  });
+  const content = matter(input.content).content.replace(/\r\n/g, "\n").trim();
+  if (content.length === 0) {
+    return [];
+  }
+
+  const sections = splitMarkdownSections(content);
+  const chunks: TextChunk[] = [];
+  for (const section of sections) {
+    chunks.push(
+      ...buildChunks({
+        source: input.source,
+        text: section,
+        maxChars: input.maxChars,
+        overlapChars: input.overlapChars,
+        initialIndex: chunks.length
+      })
+    );
+  }
+
+  return chunks;
 }
 
 export function chunkText(input: ChunkInput): TextChunk[] {
@@ -29,26 +45,62 @@ export function chunkText(input: ChunkInput): TextChunk[] {
     return [];
   }
 
+  return buildChunks({
+    source: input.source,
+    text,
+    maxChars: input.maxChars,
+    overlapChars: input.overlapChars,
+    initialIndex: 0
+  });
+}
+
+function buildChunks(input: {
+  source: string;
+  text: string;
+  maxChars: number;
+  overlapChars: number;
+  initialIndex: number;
+}): TextChunk[] {
   const chunks: TextChunk[] = [];
   let start = 0;
-  while (start < text.length) {
-    const end = findChunkEnd(text, start, input.maxChars);
-    const chunkText = text.slice(start, end).trim();
+  while (start < input.text.length) {
+    const end = findChunkEnd(input.text, start, input.maxChars);
+    const chunkText = input.text.slice(start, end).trim();
     if (chunkText.length > 0) {
+      const chunkIndex = input.initialIndex + chunks.length;
       chunks.push({
-        id: chunkId(input.source, chunks.length),
+        id: chunkId(input.source, chunkIndex),
         text: chunkText,
-        chunk_idx: chunks.length
+        chunk_idx: chunkIndex
       });
     }
 
-    if (end >= text.length) {
+    if (end >= input.text.length) {
       break;
     }
-    start = findChunkStart(text, Math.max(end - input.overlapChars, start + 1));
+    start = findChunkStart(input.text, Math.max(end - input.overlapChars, start + 1));
   }
 
   return chunks;
+}
+
+function splitMarkdownSections(text: string): string[] {
+  const sections: string[] = [];
+  let current: string[] = [];
+
+  for (const line of text.split("\n")) {
+    if (/^#{1,6}\s+\S/.test(line) && current.some((value) => value.trim().length > 0)) {
+      sections.push(current.join("\n").trim());
+      current = [];
+    }
+    current.push(line);
+  }
+
+  if (current.some((value) => value.trim().length > 0)) {
+    sections.push(current.join("\n").trim());
+  }
+
+  return sections;
 }
 
 function findChunkStart(text: string, desiredStart: number): number {

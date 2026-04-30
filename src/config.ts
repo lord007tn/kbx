@@ -23,8 +23,8 @@ export function setConfigValue(config: WorkspaceConfig, key: string, rawValue: s
       }
       break;
     case "chunk.strategy":
-      if (rawValue !== "fixed") {
-        throw new Error("Only chunk.strategy=fixed is supported right now");
+      if (rawValue !== "heading" && rawValue !== "fixed") {
+        throw new Error("chunk.strategy must be heading or fixed");
       }
       next.chunk.strategy = rawValue;
       break;

@@ -27,7 +27,7 @@ export const defaultConfig: WorkspaceConfig = {
   chunk: {
     size: 800,
     overlap: 100,
-    strategy: "fixed"
+    strategy: "heading"
   },
   mcp: {
     citations: "safe"

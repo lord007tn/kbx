@@ -1,4 +1,4 @@
-import { chunkText } from "./chunk.js";
+import { chunkMarkdown, chunkText } from "./chunk.js";
 import { createEmbedder } from "./embedding.js";
 import { listIndexableFiles } from "./files.js";
 import { readJson, writeJson } from "./io.js";
@@ -52,13 +52,21 @@ export async function ingestWorkspaceTarget(workspace: Workspace, target: string
 
       store.deleteSource(file.relativePath);
 
-      const textChunks = chunkText({
-        source: file.relativePath,
-        content: file.content,
-        maxChars: config.chunk.size,
-        overlapChars: config.chunk.overlap,
-        stripFrontmatter: file.extension === ".md" || file.extension === ".mdx"
-      });
+      const isMarkdown = file.extension === ".md" || file.extension === ".mdx";
+      const textChunks = isMarkdown && config.chunk.strategy === "heading"
+        ? chunkMarkdown({
+            source: file.relativePath,
+            content: file.content,
+            maxChars: config.chunk.size,
+            overlapChars: config.chunk.overlap
+          })
+        : chunkText({
+            source: file.relativePath,
+            content: file.content,
+            maxChars: config.chunk.size,
+            overlapChars: config.chunk.overlap,
+            stripFrontmatter: isMarkdown
+          });
 
       for (const chunk of textChunks) {
         chunksToEmbed.push({

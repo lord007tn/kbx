@@ -16,7 +16,7 @@ export interface WorkspaceConfig {
   chunk: {
     size: number;
     overlap: number;
-    strategy: "fixed";
+    strategy: "heading" | "fixed";
   };
   mcp: {
     citations: "safe" | "full-path";
