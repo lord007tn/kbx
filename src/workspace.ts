@@ -1,5 +1,5 @@
 import { createId } from "@paralleldrive/cuid2";
-import { access, mkdir, rm, stat } from "node:fs/promises";
+import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -92,12 +92,17 @@ export async function initWorkspace(root: string): Promise<Workspace> {
     await writeJson(workspace.sourcesPath, sources);
   }
 
+  await ignoreKbxInGit(workspace.root);
   await registerWorkspace(workspace);
   return workspace;
 }
 
 export async function loadManifest(workspace: Workspace): Promise<WorkspaceManifest> {
   return readJson<WorkspaceManifest>(workspace.manifestPath);
+}
+
+export async function saveManifest(workspace: Workspace, manifest: WorkspaceManifest): Promise<void> {
+  await writeJson(workspace.manifestPath, manifest);
 }
 
 export async function loadConfig(workspace: Workspace): Promise<WorkspaceConfig> {
@@ -113,6 +118,10 @@ export async function loadSources(workspace: Workspace): Promise<SourceEntry[]> 
 
 export async function saveSources(workspace: Workspace, sources: SourceEntry[]): Promise<void> {
   await writeJson(workspace.sourcesPath, sources);
+}
+
+export async function saveConfig(workspace: Workspace, config: WorkspaceConfig): Promise<void> {
+  await writeJson(workspace.configPath, config);
 }
 
 export async function touchManifest(workspace: Workspace): Promise<void> {
@@ -206,4 +215,26 @@ export async function assertDirectory(filePath: string): Promise<void> {
   if (!info.isDirectory()) {
     throw new Error(`${filePath} is not a directory`);
   }
+}
+
+async function ignoreKbxInGit(root: string): Promise<void> {
+  if (!(await exists(path.join(root, ".git")))) {
+    return;
+  }
+
+  const gitignorePath = path.join(root, ".gitignore");
+  let content = "";
+  try {
+    content = await readFile(gitignorePath, "utf8");
+  } catch {
+    // A git repository without .gitignore is valid.
+  }
+
+  const lines = content.split(/\r?\n/).map((line) => line.trim());
+  if (lines.includes(".kbx/") || lines.includes(".kbx")) {
+    return;
+  }
+
+  const prefix = content.length > 0 && !content.endsWith("\n") ? "\n" : "";
+  await writeFile(gitignorePath, `${content}${prefix}.kbx/\n`, "utf8");
 }

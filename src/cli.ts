@@ -2,19 +2,24 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { Command } from "commander";
 import path from "node:path";
+import { getConfigValue, listConfigValues, setConfigValue } from "./config.js";
 import { runDoctor } from "./doctor.js";
 import { directorySizeBytes, formatBytes } from "./io.js";
 import { ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
+import { MODEL_CATALOG, resolveModel } from "./models.js";
 import { searchWorkspace } from "./search.js";
 import {
   deleteWorkspaceKnowledgeBase,
   findWorkspace,
   forgetWorkspace,
   initWorkspace,
+  loadConfig,
   loadManifest,
   loadRegistry,
   loadSources,
   registryPath,
+  saveConfig,
+  saveManifest,
   workspaceFromRoot
 } from "./workspace.js";
 import { ChunkVectorStore } from "./vector-store.js";
@@ -74,6 +79,40 @@ program
       console.log(indent(excerpt(hit.text)));
       console.log("");
     }
+  });
+
+program
+  .command("config")
+  .description("View or edit workspace config.")
+  .argument("<action>", "get or set")
+  .argument("[key]", "config key")
+  .argument("[value]", "config value")
+  .action(async (action: string, key?: string, value?: string) => {
+    const workspace = await requireWorkspace();
+    const config = await loadConfig(workspace);
+
+    if (action === "get") {
+      if (key) {
+        console.log(String(getConfigValue(config, key)));
+        return;
+      }
+
+      for (const entry of listConfigValues(config)) {
+        console.log(`${entry.key}=${entry.value}`);
+      }
+      return;
+    }
+
+    if (action === "set") {
+      if (!key || value === undefined) {
+        throw new Error("Usage: kbx config set <key> <value>");
+      }
+      await saveConfig(workspace, setConfigValue(config, key, value));
+      console.log(`${key}=${value}`);
+      return;
+    }
+
+    throw new Error("Config action must be get or set.");
   });
 
 program
@@ -224,6 +263,70 @@ program
     if (lines.some((line) => !line.ok)) {
       process.exitCode = 1;
     }
+  });
+
+const modelCommand = program
+  .command("model")
+  .description("Inspect and change embedding models.");
+
+modelCommand
+  .command("list")
+  .description("List supported embedding models.")
+  .action(async () => {
+    const workspace = await findWorkspace(process.cwd());
+    const currentModel = workspace ? (await loadManifest(workspace)).model : "";
+    console.log("ID          Size      Dim   Profile    Selected  Description");
+    for (const model of MODEL_CATALOG) {
+      const selected = model.model === currentModel ? "yes" : "no";
+      console.log(`${model.id.padEnd(11)} ${model.size.padEnd(9)} ${String(model.dim).padEnd(5)} ${model.profile.padEnd(10)} ${selected.padEnd(9)} ${model.description}`);
+    }
+  });
+
+modelCommand
+  .command("use")
+  .description("Select a supported embedding model.")
+  .argument("<model-id>", "catalog model ID")
+  .option("--reindex", "reset and rebuild from sources after switching")
+  .option("-y, --yes", "skip confirmation")
+  .action(async (modelId: string, options: { reindex?: boolean; yes?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const model = resolveModel(modelId);
+    const manifest = await loadManifest(workspace);
+    if (manifest.model === model.model && manifest.dim === model.dim) {
+      console.log(`Model already selected: ${model.id}`);
+      return;
+    }
+
+    const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+    const hasIndex = Object.keys(stats.files).length > 0;
+    if (hasIndex && options.reindex !== true) {
+      throw new Error("Switching models requires rebuilding vectors. Re-run with --reindex.");
+    }
+
+    if (hasIndex) {
+      const ok = options.yes === true || await confirmAction(`Switch to ${model.id} and rebuild the current workspace index?`);
+      if (!ok) {
+        console.log("Cancelled.");
+        return;
+      }
+    }
+
+    const sources = await loadSources(workspace);
+    await saveManifest(workspace, {
+      ...manifest,
+      model: model.model,
+      dim: model.dim,
+      updated_at: new Date().toISOString()
+    });
+    await resetWorkspaceIndex(workspace);
+
+    if (options.reindex === true) {
+      for (const source of sources) {
+        await ingestWorkspaceTarget(workspace, path.resolve(workspace.root, source.path));
+      }
+    }
+
+    console.log(`Selected model ${model.id} (${model.dim}d).`);
   });
 
 program.exitOverride();
