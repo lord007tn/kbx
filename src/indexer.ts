@@ -3,7 +3,7 @@ import { createEmbedder } from "./embedding.js";
 import { listIndexableFiles } from "./files.js";
 import { readJson, writeJson } from "./io.js";
 import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace.js";
-import { coversSource, normalizeSources, sourceForTarget } from "./sources.js";
+import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources.js";
 import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats } from "./types.js";
 import { ChunkVectorStore } from "./vector-store.js";
 import { rm } from "node:fs/promises";
@@ -15,13 +15,13 @@ export interface IngestResult {
   deleted: number;
 }
 
-export async function ingestWorkspaceTarget(workspace: Workspace, target: string): Promise<IngestResult> {
+export async function ingestWorkspaceTarget(workspace: Workspace, target: string, options: { allowExternal?: boolean } = {}): Promise<IngestResult> {
   const [manifest, config, existingSources] = await Promise.all([
     loadManifest(workspace),
     loadConfig(workspace),
     loadSources(workspace)
   ]);
-  const source = sourceForTarget(workspace.root, target);
+  const source = await sourceForIngestTarget(workspace, target, options.allowExternal === true);
   const sources = normalizeSources([...existingSources, source]);
   await saveSources(workspace, sources);
 
@@ -73,9 +73,9 @@ export async function ingestWorkspaceTarget(workspace: Workspace, target: string
           id: chunk.id,
           text: chunk.text,
           source: file.relativePath,
-          human_source: file.relativePath,
-          citation_source: file.relativePath,
-          source_origin: "workspace",
+          human_source: humanSource(source, file.relativePath),
+          citation_source: citationSource(source, file.relativePath),
+          source_origin: source.kind,
           chunk_idx: chunk.chunk_idx,
           mtime: file.mtime,
           tags: ""
@@ -215,4 +215,24 @@ function resolveSourceIndex(sources: Array<{ path: string }>, selector: string):
 
 function isCoveredBySource(sourcePath: string, filePath: string): boolean {
   return coversSource(sourcePath, filePath) || sourcePath === filePath;
+}
+
+function humanSource(source: { kind: string; path: string; original_path?: string }, filePath: string): string {
+  if (source.kind !== "external_import" || !source.original_path) {
+    return filePath;
+  }
+  const relative = relativeToSource(source.path, filePath);
+  return `${source.original_path}${relative ? `/${relative}` : ""}`;
+}
+
+function citationSource(source: { kind: string; path: string }, filePath: string): string {
+  if (source.kind !== "external_import") {
+    return filePath;
+  }
+  const relative = relativeToSource(source.path, filePath);
+  return `external:${relative || "."}`;
+}
+
+function relativeToSource(sourcePath: string, filePath: string): string {
+  return filePath === sourcePath ? "" : filePath.slice(sourcePath.length + 1);
 }

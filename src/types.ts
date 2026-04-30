@@ -23,11 +23,22 @@ export interface WorkspaceConfig {
   };
 }
 
-export interface SourceEntry {
+export type SourceEntry = WorkspaceSourceEntry | ExternalImportSourceEntry;
+
+export interface WorkspaceSourceEntry {
   path: string;
   kind: "workspace";
   include: string[];
   exclude: string[];
+}
+
+export interface ExternalImportSourceEntry {
+  path: string;
+  kind: "external_import";
+  include: string[];
+  exclude: string[];
+  original_path: string;
+  imported_at: string;
 }
 
 export interface RegistryEntry {
@@ -44,7 +55,7 @@ export interface ChunkRecord {
   source: string;
   human_source: string;
   citation_source: string;
-  source_origin: "workspace";
+  source_origin: "workspace" | "external_import";
   chunk_idx: number;
   mtime: number;
   tags: string;

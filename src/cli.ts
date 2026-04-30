@@ -49,14 +49,15 @@ program
   .description("Index text-like files in this workspace.")
   .argument("[path]", "workspace path to ingest", ".")
   .option("--watch", "watch sources and refresh changed files")
-  .action(async (targetPath: string, options: { watch?: boolean }) => {
+  .option("--allow-external", "snapshot and index a path outside the workspace")
+  .action(async (targetPath: string, options: { watch?: boolean; allowExternal?: boolean }) => {
     const workspace = await findWorkspace(process.cwd()) ?? await maybeInitWorkspace();
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
     }
 
     const absoluteTarget = path.resolve(targetPath);
-    const result = await ingestWorkspaceTarget(workspace, absoluteTarget);
+    const result = await ingestWorkspaceTarget(workspace, absoluteTarget, { allowExternal: options.allowExternal });
     console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
 
     if (options.watch === true) {

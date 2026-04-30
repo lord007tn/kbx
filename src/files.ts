@@ -104,6 +104,9 @@ export async function listIndexableFiles(workspaceRoot: string, targetRelativePa
 }
 
 function isBuiltInExcluded(relativePath: string): boolean {
+  if (relativePath.startsWith(".kbx/imports/")) {
+    return false;
+  }
   const matcher = ignore().add(DEFAULT_EXCLUDES);
   return matcher.ignores(relativePath);
 }
