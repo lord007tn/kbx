@@ -13,7 +13,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "build": "tsdown src/cli.ts --format esm --target node20 --platform node --dts --clean",
+    "build": "tsdown",
     "dev": "tsx src/cli.ts",
     "example:hf-markdown": "node examples/hf-open-markdown/fetch-open-markdown.mjs",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",

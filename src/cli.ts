@@ -5,13 +5,14 @@ import path from "node:path";
 import { getConfigValue, listConfigValues, setConfigValue } from "./config";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
-import { ingestSource, ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, removeSource, resetWorkspaceIndex, resolveSourceEntry } from "./indexer";
 import { runMcpServer } from "./mcp";
 import { MODEL_CATALOG, resolveModel } from "./models";
 import { searchWorkspace } from "./search";
 import { watchIngest } from "./watch";
 import {
   deleteWorkspaceKnowledgeBase,
+  findGitRoot,
   findWorkspace,
   forgetWorkspace,
   initWorkspace,
@@ -37,10 +38,16 @@ program
   .command("init")
   .description("Create .kbx/ for the current workspace.")
   .argument("[path]", "workspace root", ".")
-  .action(async (targetPath: string) => {
-    const workspace = await initWorkspace(path.resolve(targetPath));
+  .option("--here", "initialize the current directory")
+  .option("--git-root", "initialize the nearest git root")
+  .option("--model <model-id>", "embedding model to use for this workspace")
+  .action(async (targetPath: string, options: { here?: boolean; gitRoot?: boolean; model?: string }) => {
+    const root = await resolveInitRoot(targetPath, options);
+    const model = options.model ? resolveModel(options.model) : undefined;
+    const workspace = await initWorkspace(root, model ? { model: model.model, dim: model.dim } : {});
     const manifest = await loadManifest(workspace);
     console.log(`Initialized ${manifest.name} (${manifest.workspace_id.slice(0, 8)})`);
+    console.log(`Model: ${modelLabel(manifest.model)} (${manifest.dim}d)`);
     console.log(workspace.kbxDir);
   });
 
@@ -50,18 +57,29 @@ program
   .argument("[path]", "workspace path to ingest", ".")
   .option("--watch", "watch sources and refresh changed files")
   .option("--allow-external", "snapshot and index a path outside the workspace")
-  .action(async (targetPath: string, options: { watch?: boolean; allowExternal?: boolean }) => {
+  .option("--include <glob>", "only ingest files matching this gitignore-style glob", collectOption, [])
+  .option("--exclude <glob>", "skip files matching this gitignore-style glob", collectOption, [])
+  .option("--no-gitignore", "do not apply .gitignore rules")
+  .action(async (
+    targetPath: string,
+    options: { watch?: boolean; allowExternal?: boolean; include: string[]; exclude: string[]; gitignore?: boolean }
+  ) => {
     const workspace = await findWorkspace(process.cwd()) ?? await maybeInitWorkspace();
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
     }
 
     const absoluteTarget = path.resolve(targetPath);
-    const result = await ingestWorkspaceTarget(workspace, absoluteTarget, { allowExternal: options.allowExternal });
+    const result = await ingestWorkspaceTarget(workspace, absoluteTarget, {
+      allowExternal: options.allowExternal,
+      include: options.include,
+      exclude: options.exclude,
+      noGitignore: options.gitignore === false
+    });
     console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
 
     if (options.watch === true) {
-      await watchIngest(workspace, absoluteTarget);
+      await watchIngest(workspace);
     }
   });
 
@@ -252,16 +270,23 @@ sourcesCommand
   .description("Remove a source entry and its indexed chunks.")
   .argument("<selector>", "source index or path")
   .option("-y, --yes", "skip confirmation")
-  .action(async (selector: string, options: { yes?: boolean }) => {
+  .option("--delete-import", "delete copied files for an external import source")
+  .action(async (selector: string, options: { yes?: boolean; deleteImport?: boolean }) => {
     const workspace = await requireWorkspace();
+    const selected = resolveSourceEntry(await loadSources(workspace), selector).source;
     const ok = options.yes === true || await confirmAction(`Remove source "${selector}" and its indexed chunks?`);
     if (!ok) {
       console.log("Cancelled.");
       return;
     }
 
-    const result = await removeSource(workspace, selector);
+    const deleteImportSnapshot = selected.kind === "external_import"
+      && (options.deleteImport === true || (process.stdin.isTTY && await confirmAction("Delete the copied external import snapshot too?")));
+    const result = await removeSource(workspace, selector, { deleteImportSnapshot });
     console.log(`Removed source ${result.source}; deleted chunks for ${result.removedFiles} file(s).`);
+    if (result.deletedImportSnapshot) {
+      console.log("Deleted external import snapshot.");
+    }
   });
 
 program
@@ -362,18 +387,18 @@ modelCommand
     }
 
     const sources = await loadSources(workspace);
-    await saveManifest(workspace, {
+    const nextManifest = {
       ...manifest,
       model: model.model,
       dim: model.dim,
       updated_at: new Date().toISOString()
-    });
-    await resetWorkspaceIndex(workspace);
+    };
 
     if (options.reindex === true) {
-      for (const source of sources) {
-        await ingestSource(workspace, source);
-      }
+      await rebuildWorkspaceIndexForModel(workspace, nextManifest, sources);
+    } else {
+      await saveManifest(workspace, nextManifest);
+      await resetWorkspaceIndex(workspace);
     }
 
     console.log(`Selected model ${model.id} (${model.dim}d).`);
@@ -398,6 +423,30 @@ function isCommanderExit(error: unknown): error is Error & { exitCode: number } 
   return error instanceof Error
     && "exitCode" in error
     && typeof (error as { exitCode?: unknown }).exitCode === "number";
+}
+
+async function resolveInitRoot(targetPath: string, options: { here?: boolean; gitRoot?: boolean }): Promise<string> {
+  if (options.here === true && options.gitRoot === true) {
+    throw new Error("Use only one of --here or --git-root.");
+  }
+  if ((options.here === true || options.gitRoot === true) && targetPath !== ".") {
+    throw new Error("Do not pass a path together with --here or --git-root.");
+  }
+  if (options.here === true) {
+    return process.cwd();
+  }
+  if (options.gitRoot === true) {
+    const gitRoot = await findGitRoot(process.cwd());
+    if (!gitRoot) {
+      throw new Error("No git root found from the current directory.");
+    }
+    return gitRoot;
+  }
+  return path.resolve(targetPath);
+}
+
+function modelLabel(modelName: string): string {
+  return MODEL_CATALOG.find((entry) => entry.model === modelName)?.id ?? modelName;
 }
 
 async function maybeInitWorkspace() {
@@ -441,6 +490,10 @@ function parsePositiveInteger(value: string): number {
     throw new Error("Expected a positive integer");
   }
   return parsed;
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 function excerpt(value: string): string {

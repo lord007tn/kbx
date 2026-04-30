@@ -1,6 +1,6 @@
 import chokidar from "chokidar";
 import path from "node:path";
-import { ingestWorkspaceTarget } from "./indexer";
+import { ingestSource, ingestWorkspaceTarget } from "./indexer";
 import { loadSources, type Workspace } from "./workspace";
 
 export async function watchIngest(workspace: Workspace, target?: string): Promise<void> {
@@ -49,9 +49,15 @@ export async function watchIngest(workspace: Workspace, target?: string): Promis
 
 async function runRefresh(workspace: Workspace, target: string | undefined, watchTargets: string[]): Promise<void> {
   try {
-    const targets = target ? [target] : watchTargets;
-    for (const item of targets) {
-      const result = await ingestWorkspaceTarget(workspace, item);
+    if (target) {
+      const result = await ingestWorkspaceTarget(workspace, target);
+      console.log(`Refreshed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
+      return;
+    }
+
+    const sources = await loadSources(workspace);
+    for (const source of sources.length > 0 ? sources : [{ path: ".", kind: "workspace" as const, include: [], exclude: [] }]) {
+      const result = await ingestSource(workspace, source);
       console.log(`Refreshed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
     }
   } catch (error) {

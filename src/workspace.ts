@@ -65,22 +65,34 @@ export async function findWorkspace(startDir = process.cwd()): Promise<Workspace
   }
 }
 
-export async function initWorkspace(root: string): Promise<Workspace> {
+export interface InitWorkspaceOptions {
+  model?: string;
+  dim?: number;
+}
+
+export async function initWorkspace(root: string, options: InitWorkspaceOptions = {}): Promise<Workspace> {
   const workspace = workspaceFromRoot(root);
   const now = new Date().toISOString();
   await mkdir(workspace.kbxDir, { recursive: true });
+  const model = options.model ?? DEFAULT_MODEL_ID;
+  const dim = options.dim ?? DEFAULT_MODEL_DIM;
 
   if (!(await exists(workspace.manifestPath))) {
     const manifest: WorkspaceManifest = {
       workspace_id: createId(),
       name: path.basename(workspace.root),
-      model: DEFAULT_MODEL_ID,
-      dim: DEFAULT_MODEL_DIM,
+      model,
+      dim,
       schema_version: SCHEMA_VERSION,
       created_at: now,
       updated_at: now
     };
     await writeJson(workspace.manifestPath, manifest);
+  } else if (options.model || options.dim) {
+    const manifest = await loadManifest(workspace);
+    if (manifest.model !== model || manifest.dim !== dim) {
+      throw new Error("Workspace is already initialized with a different model. Use kbx model use to switch models.");
+    }
   }
 
   if (!(await exists(workspace.configPath))) {
@@ -230,6 +242,22 @@ export async function assertDirectory(filePath: string): Promise<void> {
   const info = await stat(filePath);
   if (!info.isDirectory()) {
     throw new Error(`${filePath} is not a directory`);
+  }
+}
+
+export async function findGitRoot(startDir = process.cwd()): Promise<string | null> {
+  let current = path.resolve(startDir);
+
+  while (true) {
+    if (await exists(path.join(current, ".git"))) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
   }
 }
 

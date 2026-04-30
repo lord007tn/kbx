@@ -96,7 +96,12 @@ export async function freshnessLine(workspace: Workspace, stats: IndexStats): Pr
   const sources = await loadSources(workspace);
   const currentFiles = new Map<string, number>();
   for (const source of sources) {
-    for (const file of await listIndexableFileEntries(workspace.root, source.path)) {
+    for (const file of await listIndexableFileEntries(workspace.root, source.path, {
+      includeKbxImports: source.kind === "external_import",
+      include: source.include,
+      exclude: source.exclude,
+      useGitignore: source.no_gitignore === true ? false : true
+    })) {
       currentFiles.set(file.relativePath, file.mtime);
     }
   }

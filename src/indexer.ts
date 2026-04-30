@@ -2,11 +2,12 @@ import { chunkMarkdown, chunkText } from "./chunk";
 import { createEmbedder } from "./embedding";
 import { listIndexableFileEntries } from "./files";
 import { readJson, writeJson } from "./io";
-import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace";
+import { loadConfig, loadManifest, loadSources, saveManifest, saveSources, touchManifest, type Workspace } from "./workspace";
 import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources";
-import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry } from "./types";
+import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry, type WorkspaceManifest } from "./types";
 import { ChunkVectorStore } from "./vector-store";
-import { readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
+import path from "node:path";
 
 const EMBED_BATCH_SIZE = 64;
 
@@ -17,9 +18,13 @@ export interface IngestResult {
   deleted: number;
 }
 
-export async function ingestWorkspaceTarget(workspace: Workspace, target: string, options: { allowExternal?: boolean } = {}): Promise<IngestResult> {
+export async function ingestWorkspaceTarget(
+  workspace: Workspace,
+  target: string,
+  options: { allowExternal?: boolean; include?: string[]; exclude?: string[]; noGitignore?: boolean } = {}
+): Promise<IngestResult> {
   const existingSources = await loadSources(workspace);
-  const source = await sourceForIngestTarget(workspace, target, options.allowExternal === true);
+  const source = await sourceForIngestTarget(workspace, target, options);
   const sources = normalizeSources([...existingSources, source]);
   await saveSources(workspace, sources);
   return ingestSource(workspace, source);
@@ -32,7 +37,12 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
   ]);
 
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
-  const files = await listIndexableFileEntries(workspace.root, source.path);
+  const files = await listIndexableFileEntries(workspace.root, source.path, {
+    includeKbxImports: source.kind === "external_import",
+    include: source.include,
+    exclude: source.exclude,
+    useGitignore: source.no_gitignore === true ? false : true
+  });
   const currentFilePaths = new Set(files.map((file) => file.relativePath));
   const embedder = createEmbedder(manifest.model, manifest.dim);
   const store = await ChunkVectorStore.open(workspace, manifest.dim);
@@ -42,7 +52,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
 
   try {
     for (const filePath of Object.keys(stats.files)) {
-      if (isCoveredBySource(source.path, filePath) && !currentFilePaths.has(filePath)) {
+      if (sourceIncludesFile(source, filePath) && !currentFilePaths.has(filePath)) {
         store.deleteSource(filePath);
         delete stats.files[filePath];
         deleted += 1;
@@ -164,21 +174,61 @@ export async function resetWorkspaceIndex(workspace: Workspace): Promise<void> {
   await touchManifest(workspace);
 }
 
+export async function rebuildWorkspaceIndexForModel(
+  workspace: Workspace,
+  nextManifest: WorkspaceManifest,
+  sources: SourceEntry[]
+): Promise<void> {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const tempDir = path.join(workspace.kbxDir, `.reindex-${suffix}`);
+  const tempWorkspace: Workspace = {
+    ...workspace,
+    kbxDir: tempDir,
+    manifestPath: path.join(tempDir, "manifest.json"),
+    configPath: path.join(tempDir, "config.json"),
+    sourcesPath: path.join(tempDir, "sources.json"),
+    statsPath: path.join(tempDir, "stats.json"),
+    collectionDir: path.join(tempDir, "collection")
+  };
+
+  await mkdir(tempDir, { recursive: true });
+  await writeJson(tempWorkspace.manifestPath, nextManifest);
+  await writeJson(tempWorkspace.configPath, await loadConfig(workspace));
+  await writeJson(tempWorkspace.sourcesPath, sources);
+
+  try {
+    if (sources.length === 0) {
+      const store = await ChunkVectorStore.open(tempWorkspace, nextManifest.dim);
+      store.close();
+      await writeJson(tempWorkspace.statsPath, emptyStats(nextManifest));
+    } else {
+      for (const source of sources) {
+        await ingestSource(tempWorkspace, source);
+      }
+    }
+
+    await swapRebuiltIndex(workspace, tempWorkspace, nextManifest);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 export interface RemoveSourceResult {
   source: string;
   removedFiles: number;
+  deletedImportSnapshot: boolean;
 }
 
-export async function removeSource(workspace: Workspace, selector: string): Promise<RemoveSourceResult> {
+export async function removeSource(
+  workspace: Workspace,
+  selector: string,
+  options: { deleteImportSnapshot?: boolean } = {}
+): Promise<RemoveSourceResult> {
   const [manifest, sources] = await Promise.all([loadManifest(workspace), loadSources(workspace)]);
-  const sourceIndex = resolveSourceIndex(sources, selector);
-  const source = sources[sourceIndex];
-  if (!source) {
-    throw new Error(`No source matches "${selector}".`);
-  }
+  const { source, index: sourceIndex } = resolveSourceEntry(sources, selector);
 
   for (const other of sources) {
-    if (other.path !== source.path && coversSource(other.path, source.path)) {
+    if (other.kind === "workspace" && source.kind === "workspace" && other.path !== source.path && coversSource(other.path, source.path)) {
       throw new Error(`Cannot remove ${source.path}; it is covered by broader source ${other.path}.`);
     }
   }
@@ -189,7 +239,7 @@ export async function removeSource(workspace: Workspace, selector: string): Prom
 
   try {
     for (const filePath of Object.keys(stats.files)) {
-      if (isCoveredBySource(source.path, filePath)) {
+      if (sourceIncludesFile(source, filePath)) {
         store.deleteSource(filePath);
         delete stats.files[filePath];
         removedFiles += 1;
@@ -205,25 +255,31 @@ export async function removeSource(workspace: Workspace, selector: string): Prom
     ...stats,
     last_ingest_at: new Date().toISOString()
   });
+  let deletedImportSnapshot = false;
+  if (source.kind === "external_import" && options.deleteImportSnapshot === true) {
+    await rm(importSnapshotRoot(workspace, source), { recursive: true, force: true });
+    deletedImportSnapshot = true;
+  }
   await touchManifest(workspace);
 
   return {
     source: source.path,
-    removedFiles
+    removedFiles,
+    deletedImportSnapshot
   };
 }
 
-function resolveSourceIndex(sources: Array<{ path: string }>, selector: string): number {
+export function resolveSourceEntry<T extends { path: string }>(sources: T[], selector: string): { source: T; index: number } {
   const asNumber = Number.parseInt(selector, 10);
   if (Number.isInteger(asNumber) && String(asNumber) === selector && asNumber >= 1 && asNumber <= sources.length) {
-    return asNumber - 1;
+    return { source: sources[asNumber - 1]!, index: asNumber - 1 };
   }
 
   const matches = sources
     .map((source, index) => ({ source, index }))
     .filter(({ source }) => source.path === selector);
   if (matches.length === 1) {
-    return matches[0]!.index;
+    return matches[0]!;
   }
   if (matches.length > 1) {
     throw new Error(`Source selector "${selector}" is ambiguous.`);
@@ -232,8 +288,76 @@ function resolveSourceIndex(sources: Array<{ path: string }>, selector: string):
   throw new Error(`No source matches "${selector}".`);
 }
 
-function isCoveredBySource(sourcePath: string, filePath: string): boolean {
-  return coversSource(sourcePath, filePath) || sourcePath === filePath;
+async function swapRebuiltIndex(workspace: Workspace, tempWorkspace: Workspace, nextManifest: WorkspaceManifest): Promise<void> {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const backupCollectionDir = path.join(workspace.kbxDir, `collection.backup-${suffix}`);
+  const backupStatsPath = path.join(workspace.kbxDir, `stats.backup-${suffix}.json`);
+  const oldManifest = await loadManifest(workspace);
+  let backedUpCollection = false;
+  let backedUpStats = false;
+
+  try {
+    if (await exists(workspace.collectionDir)) {
+      await rename(workspace.collectionDir, backupCollectionDir);
+      backedUpCollection = true;
+    }
+    if (await exists(workspace.statsPath)) {
+      await rename(workspace.statsPath, backupStatsPath);
+      backedUpStats = true;
+    }
+
+    await rename(tempWorkspace.collectionDir, workspace.collectionDir);
+    await rename(tempWorkspace.statsPath, workspace.statsPath);
+    await saveManifest(workspace, nextManifest);
+
+    await Promise.all([
+      rm(backupCollectionDir, { recursive: true, force: true }),
+      rm(backupStatsPath, { force: true })
+    ]);
+  } catch (error) {
+    await Promise.all([
+      rm(workspace.collectionDir, { recursive: true, force: true }),
+      rm(workspace.statsPath, { force: true })
+    ]);
+    if (backedUpCollection) {
+      await rename(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
+    }
+    if (backedUpStats) {
+      await rename(backupStatsPath, workspace.statsPath).catch(() => undefined);
+    }
+    await saveManifest(workspace, oldManifest).catch(() => undefined);
+    throw error;
+  }
+}
+
+function emptyStats(manifest: WorkspaceManifest): IndexStats {
+  return {
+    schema_version: SCHEMA_VERSION,
+    model: manifest.model,
+    dim: manifest.dim,
+    last_ingest_at: new Date().toISOString(),
+    files: {}
+  };
+}
+
+function importSnapshotRoot(workspace: Workspace, source: SourceEntry): string {
+  return path.dirname(path.resolve(workspace.root, source.path));
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sourceIncludesFile(source: SourceEntry, filePath: string): boolean {
+  if (source.kind === "workspace" && isKbxImport(filePath)) {
+    return false;
+  }
+  return coversSource(source.path, filePath) || source.path === filePath;
 }
 
 function humanSource(source: { kind: string; path: string; original_path?: string }, filePath: string): string {
@@ -254,4 +378,8 @@ function citationSource(source: { kind: string; path: string }, filePath: string
 
 function relativeToSource(sourcePath: string, filePath: string): string {
   return filePath === sourcePath ? "" : filePath.slice(sourcePath.length + 1);
+}
+
+function isKbxImport(filePath: string): boolean {
+  return filePath === ".kbx/imports" || filePath.startsWith(".kbx/imports/");
 }

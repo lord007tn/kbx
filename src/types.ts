@@ -1,6 +1,6 @@
 export const SCHEMA_VERSION = 1;
-export const DEFAULT_MODEL_ID = "Xenova/all-MiniLM-L6-v2";
-export const DEFAULT_MODEL_DIM = 384;
+export const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
+export const DEFAULT_MODEL_DIM = 768;
 
 export interface WorkspaceManifest {
   workspace_id: string;
@@ -30,6 +30,7 @@ export interface WorkspaceSourceEntry {
   kind: "workspace";
   include: string[];
   exclude: string[];
+  no_gitignore?: boolean;
 }
 
 export interface ExternalImportSourceEntry {
@@ -37,6 +38,7 @@ export interface ExternalImportSourceEntry {
   kind: "external_import";
   include: string[];
   exclude: string[];
+  no_gitignore?: boolean;
   original_path: string;
   imported_at: string;
 }
@@ -81,6 +83,7 @@ export interface IndexStats {
 export interface SearchHit {
   id: string;
   source: string;
+  citation_source: string;
   chunk_idx: number;
   score: number;
   text: string;

@@ -29,7 +29,10 @@ $env:KBX_EMBEDDER='hash' # PowerShell
 
 ```bash
 kbx init
+kbx init --model minilm
+kbx init --git-root --model nomic
 kbx ingest
+kbx ingest docs --include "**/*.md" --exclude "drafts/**" --no-gitignore
 kbx search "workspace registry"
 kbx stats --fresh
 ```
@@ -72,16 +75,20 @@ Tools exposed:
 
 ## Current Scope
 
+This is pre-release alpha scope. The CLI is usable for local development and smoke testing, but npm publishing, standalone binaries, and broader distribution hardening are still pending.
+
 Implemented:
 
 - workspace init, registry list/forget/delete
 - ingest/search/stats/reset/doctor/config
 - source list/remove
 - external import snapshots
+- ingest policy overrides with `--include`, `--exclude`, and `--no-gitignore`
 - heading-aware Markdown chunking and fixed text/code chunking
 - Zvec-backed local vector collection
 - Transformers.js embeddings with a hash test embedder
 - model catalog list/use/benchmark
+- init-time model selection with `--model`
 - stdio MCP server
 
 Not yet implemented:

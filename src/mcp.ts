@@ -4,7 +4,7 @@ import { z } from "zod";
 import { runDoctor } from "./doctor";
 import { loadIndexStats } from "./indexer";
 import { searchWorkspace } from "./search";
-import { loadManifest, loadSources, type Workspace } from "./workspace";
+import { loadConfig, loadManifest, loadSources, type Workspace } from "./workspace";
 import { ChunkVectorStore } from "./vector-store";
 
 export async function runMcpServer(workspace: Workspace): Promise<void> {
@@ -27,8 +27,18 @@ export async function runMcpServer(workspace: Workspace): Promise<void> {
       }
     },
     async ({ query, top_k }) => {
-      const hits = await searchWorkspace(workspace, query, top_k ?? 5);
-      return textResult(JSON.stringify({ results: hits }, null, 2));
+      const [hits, config] = await Promise.all([
+        searchWorkspace(workspace, query, top_k ?? 5),
+        loadConfig(workspace)
+      ]);
+      const results = hits.map((hit) => ({
+        id: hit.id,
+        source: config.mcp.citations === "safe" ? hit.citation_source : hit.source,
+        chunk_idx: hit.chunk_idx,
+        score: hit.score,
+        text: hit.text
+      }));
+      return textResult(JSON.stringify({ results }, null, 2));
     }
   );
 
@@ -61,14 +71,25 @@ export async function runMcpServer(workspace: Workspace): Promise<void> {
       }
     },
     async ({ id }) => {
-      const manifest = await loadManifest(workspace);
+      const [manifest, config] = await Promise.all([
+        loadManifest(workspace),
+        loadConfig(workspace)
+      ]);
       const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
       try {
         const chunk = store.getChunk(id);
         if (!chunk) {
           return textResult(JSON.stringify({ error: "chunk_not_found", id }, null, 2), true);
         }
-        return textResult(JSON.stringify({ chunk }, null, 2));
+        return textResult(JSON.stringify({
+          chunk: {
+            id: chunk.id,
+            text: chunk.text,
+            source: config.mcp.citations === "safe" ? chunk.citation_source : chunk.source,
+            chunk_idx: chunk.chunk_idx,
+            mtime: chunk.mtime
+          }
+        }, null, 2));
       } finally {
         store.close();
       }

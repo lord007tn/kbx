@@ -43,6 +43,7 @@ test("ChunkVectorStore upserts, searches, and deletes chunks", async () => {
       const hits = store.search([1, 0, 0], 2);
       assert.equal(hits[0]?.id, "alpha-0");
       assert.equal(hits[0]?.score, 1);
+      assert.equal(hits[0]?.citation_source, "alpha.md");
 
       store.deleteSource("alpha.md");
       const afterDelete = store.search([1, 0, 0], 2);

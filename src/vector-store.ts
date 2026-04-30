@@ -88,7 +88,7 @@ export class ChunkVectorStore {
       fieldName: "embedding",
       vector,
       topk: topK,
-      outputFields: ["text", "human_source", "chunk_idx"],
+      outputFields: ["text", "human_source", "citation_source", "chunk_idx"],
       params: {
         indexType: ZVecIndexType.HNSW,
         ef: Math.max(64, topK * 8)
@@ -163,6 +163,7 @@ function toSearchHit(doc: ZVecDoc): SearchHit {
   return {
     id: doc.id,
     source: String(doc.fields.human_source ?? ""),
+    citation_source: String(doc.fields.citation_source ?? ""),
     chunk_idx: Number(doc.fields.chunk_idx ?? 0),
     score: distanceToScore(doc.score),
     text: String(doc.fields.text ?? "")

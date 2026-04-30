@@ -6,7 +6,13 @@ import type { SourceEntry } from "./types";
 import { toPosixPath } from "./io";
 import type { Workspace } from "./workspace";
 
-export function sourceForTarget(workspaceRoot: string, target: string): SourceEntry {
+export interface SourcePolicyOptions {
+  include?: string[];
+  exclude?: string[];
+  noGitignore?: boolean;
+}
+
+export function sourceForTarget(workspaceRoot: string, target: string, options: SourcePolicyOptions = {}): SourceEntry {
   const relative = path.relative(workspaceRoot, target);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("v0.1 only supports ingesting paths inside the initialized workspace");
@@ -15,18 +21,19 @@ export function sourceForTarget(workspaceRoot: string, target: string): SourceEn
   return {
     path: relative === "" ? "." : toPosixPath(relative),
     kind: "workspace",
-    include: [],
-    exclude: []
+    include: options.include ?? [],
+    exclude: options.exclude ?? [],
+    no_gitignore: options.noGitignore === true ? true : undefined
   };
 }
 
-export async function sourceForIngestTarget(workspace: Workspace, target: string, allowExternal: boolean): Promise<SourceEntry> {
+export async function sourceForIngestTarget(workspace: Workspace, target: string, options: SourcePolicyOptions & { allowExternal?: boolean } = {}): Promise<SourceEntry> {
   const relative = path.relative(workspace.root, target);
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
-    return sourceForTarget(workspace.root, target);
+    return sourceForTarget(workspace.root, target, options);
   }
 
-  if (!allowExternal) {
+  if (options.allowExternal !== true) {
     throw new Error("External paths require --allow-external");
   }
 
@@ -53,8 +60,9 @@ export async function sourceForIngestTarget(workspace: Workspace, target: string
   return {
     path: toPosixPath(path.relative(workspace.root, filesRoot)),
     kind: "external_import",
-    include: [],
-    exclude: [],
+    include: options.include ?? [],
+    exclude: options.exclude ?? [],
+    no_gitignore: options.noGitignore === true ? true : undefined,
     original_path: absoluteTarget,
     imported_at: importedAt
   };
@@ -68,7 +76,7 @@ export function normalizeSources(sources: SourceEntry[]): SourceEntry[] {
 
   const sorted = [...unique.values()].sort((a, b) => a.path.localeCompare(b.path));
   return sorted.filter((candidate) => {
-    return !sorted.some((other) => other.path !== candidate.path && coversSource(other.path, candidate.path));
+    return !sorted.some((other) => other.path !== candidate.path && canSourceCover(other, candidate));
   });
 }
 
@@ -81,4 +89,11 @@ export function coversSource(parent: string, child: string): boolean {
 function normalizeSourcePath(sourcePath: string): string {
   const normalized = sourcePath.replaceAll("\\", "/").replace(/\/+/g, "/").replace(/\/$/, "");
   return normalized === "" ? "." : normalized;
+}
+
+function canSourceCover(parent: SourceEntry, child: SourceEntry): boolean {
+  if (parent.kind !== "workspace" || child.kind !== "workspace") {
+    return false;
+  }
+  return coversSource(parent.path, child.path);
 }
