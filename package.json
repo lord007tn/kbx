@@ -4,7 +4,7 @@
   "description": "Local-first knowledge base CLI for searchable AI context.",
   "type": "module",
   "bin": {
-    "kbx": "./dist/cli.js"
+    "kbx": "./dist/cli.mjs"
   },
   "files": [
     "dist"
@@ -13,7 +13,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --target node20 --dts --clean",
+    "build": "tsdown src/cli.ts --format esm --target node20 --platform node --dts --clean",
     "dev": "tsx src/cli.ts",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "tsup": "^8.5.1",
+    "tsdown": "^0.21.10",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
