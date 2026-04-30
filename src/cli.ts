@@ -32,15 +32,43 @@ const program = new Command();
 program
   .name("kbx")
   .description("Local-first knowledge base CLI for searchable AI context.")
-  .version("0.1.0");
+  .summary("Index a workspace into .kbx/ and retrieve local chunks for AI assistants.")
+  .version("0.1.0")
+  .showHelpAfterError()
+  .addHelpText("after", `
+
+Common workflows:
+  $ kbx init --model nomic
+  $ kbx ingest
+  $ kbx search "workspace registry" -k 5
+  $ kbx mcp
+
+Privacy model:
+  kbx stores workspace data under .kbx/ and does not generate answers.
+  Search and MCP retrieve local chunks; your AI assistant decides how to use them.
+`);
 
 program
   .command("init")
   .description("Create .kbx/ for the current workspace.")
+  .summary("Initialize workspace metadata, config, sources, and model selection.")
   .argument("[path]", "workspace root", ".")
   .option("--here", "initialize the current directory")
   .option("--git-root", "initialize the nearest git root")
   .option("--model <model-id>", "embedding model to use for this workspace")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx init
+  $ kbx init --here --model minilm
+  $ kbx init --git-root --model nomic
+
+Model IDs:
+  minilm      fastest and smallest
+  nomic       default balanced model
+  bge-base    English quality candidate
+  qwen3-0.6b  larger quality candidate
+`)
   .action(async (targetPath: string, options: { here?: boolean; gitRoot?: boolean; model?: string }) => {
     const root = await resolveInitRoot(targetPath, options);
     const model = options.model ? resolveModel(options.model) : undefined;
@@ -54,12 +82,25 @@ program
 program
   .command("ingest")
   .description("Index text-like files in this workspace.")
+  .summary("Refresh the current workspace index from workspace or external sources.")
   .argument("[path]", "workspace path to ingest", ".")
   .option("--watch", "watch sources and refresh changed files")
   .option("--allow-external", "snapshot and index a path outside the workspace")
   .option("--include <glob>", "only ingest files matching this gitignore-style glob", collectOption, [])
   .option("--exclude <glob>", "skip files matching this gitignore-style glob", collectOption, [])
   .option("--no-gitignore", "do not apply .gitignore rules")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx ingest
+  $ kbx ingest docs --include "**/*.md" --exclude "drafts/**"
+  $ kbx ingest C:\\Users\\you\\notes --allow-external
+  $ kbx ingest --watch
+
+Notes:
+  External paths require --allow-external and are copied into .kbx/imports/.
+  Search does not auto-refresh; rerun ingest or use --watch while editing.
+`)
   .action(async (
     targetPath: string,
     options: { watch?: boolean; allowExternal?: boolean; include: string[]; exclude: string[]; gitignore?: boolean }
@@ -86,8 +127,17 @@ program
 program
   .command("search")
   .description("Retrieve top chunks from the current workspace.")
+  .summary("Run semantic retrieval against the nearest initialized workspace.")
   .argument("<query>", "search query")
   .option("-k, --top-k <number>", "number of chunks to return", parsePositiveInteger, 5)
+  .addHelpText("after", `
+
+Examples:
+  $ kbx search "deployment notes"
+  $ kbx search "workspace registry" -k 10
+
+Search reads the existing index only. Use kbx stats --fresh to check staleness.
+`)
   .action(async (query: string, options: { topK: number }) => {
     const workspace = await findWorkspace(process.cwd());
     if (!workspace) {
@@ -110,6 +160,19 @@ program
 program
   .command("mcp")
   .description("Run the MCP server over stdio.")
+  .summary("Expose read-only kbx search tools to MCP clients.")
+  .addHelpText("after", `
+
+Example MCP config:
+  {
+    "mcpServers": {
+      "kbx": { "command": "kbx", "args": ["mcp"] }
+    }
+  }
+
+Tools:
+  kbx_search, kbx_list_sources, kbx_get_chunk, kbx_index_status
+`)
   .action(async () => {
     const workspace = await requireWorkspace();
     await runMcpServer(workspace);
@@ -118,9 +181,21 @@ program
 program
   .command("config")
   .description("View or edit workspace config.")
+  .summary("Read or change workspace-local kbx settings.")
   .argument("<action>", "get or set")
   .argument("[key]", "config key")
   .argument("[value]", "config value")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx config get
+  $ kbx config get chunk.size
+  $ kbx config set chunk.size 1200
+  $ kbx config set mcp.citations full-path
+
+Keys:
+  chunk.size, chunk.overlap, chunk.strategy, mcp.citations
+`)
   .action(async (action: string, key?: string, value?: string) => {
     const workspace = await requireWorkspace();
     const config = await loadConfig(workspace);
@@ -152,7 +227,14 @@ program
 program
   .command("stats")
   .description("Show basic workspace metadata.")
+  .summary("Print stored index metadata, optionally scanning freshness.")
   .option("--fresh", "scan source files for stale/deleted/new files")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx stats
+  $ kbx stats --fresh
+`)
   .action(async (options: { fresh?: boolean }) => {
     const workspace = await findWorkspace(process.cwd());
     if (!workspace) {
@@ -188,7 +270,16 @@ program
 program
   .command("reset")
   .description("Clear current workspace index, preserving config and identity.")
+  .summary("Delete derived vectors and stats for the current workspace.")
   .option("-y, --yes", "skip confirmation")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx reset
+  $ kbx reset --yes
+
+Reset preserves .kbx/config.json, manifest.json, sources.json, and registry identity.
+`)
   .action(async (options: { yes?: boolean }) => {
     const workspace = await requireWorkspace();
     const ok = options.yes === true || await confirmAction("Clear the current workspace index?");
@@ -203,7 +294,15 @@ program
 
 const workspaceCommand = program
   .command("workspace")
-  .description("Manage registered workspaces.");
+  .description("Manage registered workspaces.")
+  .summary("List, forget, or delete workspace knowledge bases.")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx workspace list
+  $ kbx workspace forget <workspace-id>
+  $ kbx workspace delete <workspace-id>
+`);
 
 workspaceCommand
   .command("list")
@@ -247,7 +346,15 @@ workspaceCommand
 
 const sourcesCommand = program
   .command("sources")
-  .description("Manage ingest sources.");
+  .description("Manage ingest sources.")
+  .summary("List or remove source roots recorded in .kbx/sources.json.")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx sources list
+  $ kbx sources remove 2
+  $ kbx sources remove 2 --delete-import --yes
+`);
 
 sourcesCommand
   .command("list")
@@ -292,9 +399,17 @@ sourcesCommand
 program
   .command("doctor")
   .description("Diagnose environment and workspace health.")
+  .summary("Check workspace, platform, registry, collection, model, and optional freshness/benchmarks.")
   .option("--fresh", "scan source files for stale/deleted/new files")
   .option("--bench", "run a small local embedding benchmark")
   .option("--deep", "include freshness scan and benchmark")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx doctor
+  $ kbx doctor --fresh
+  $ kbx doctor --deep
+`)
   .action(async (options: { fresh?: boolean; bench?: boolean; deep?: boolean }) => {
     const workspace = await findWorkspace(process.cwd());
     const lines = await runDoctor(workspace, {
@@ -313,11 +428,20 @@ program
 
 const modelCommand = program
   .command("model")
-  .description("Inspect and change embedding models.");
+  .description("Inspect and change embedding models.")
+  .summary("List, benchmark, and switch supported embedding models.")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx model list
+  $ kbx model benchmark
+  $ kbx model use minilm --reindex
+`);
 
 modelCommand
   .command("list")
   .description("List supported embedding models.")
+  .summary("Show catalog IDs, dimensions, size estimates, and selected model.")
   .action(async () => {
     const workspace = await findWorkspace(process.cwd());
     const currentModel = workspace ? (await loadManifest(workspace)).model : "";
@@ -331,9 +455,17 @@ modelCommand
 modelCommand
   .command("benchmark")
   .description("Benchmark the current or selected embedding model.")
+  .summary("Run a small local embedding throughput test.")
   .argument("[model-id]", "catalog model ID")
   .option("--all", "benchmark every catalog model after confirmation")
   .option("-y, --yes", "skip confirmation")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx model benchmark
+  $ kbx model benchmark minilm
+  $ kbx model benchmark --all
+`)
   .action(async (modelId: string | undefined, options: { all?: boolean; yes?: boolean }) => {
     const workspace = await requireWorkspace();
     const manifest = await loadManifest(workspace);
@@ -360,9 +492,19 @@ modelCommand
 modelCommand
   .command("use")
   .description("Select a supported embedding model.")
+  .summary("Switch model selection; use --reindex when indexed content exists.")
   .argument("<model-id>", "catalog model ID")
   .option("--reindex", "reset and rebuild from sources after switching")
   .option("-y, --yes", "skip confirmation")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx model use minilm
+  $ kbx model use nomic --reindex
+  $ kbx model use bge-base --reindex --yes
+
+When indexed content exists, kbx rebuilds into a temporary index before swapping it in.
+`)
   .action(async (modelId: string, options: { reindex?: boolean; yes?: boolean }) => {
     const workspace = await requireWorkspace();
     const model = resolveModel(modelId);

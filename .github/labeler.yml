@@ -1,0 +1,40 @@
+cli:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cli.ts"
+
+indexing:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/indexer.ts"
+          - "src/files.ts"
+          - "src/chunk.ts"
+          - "src/sources.ts"
+
+mcp:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/mcp.ts"
+
+ci/cd:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "README.md"
+          - "CONTRIBUTING.md"
+          - "SECURITY.md"
+          - "SUPPORT.md"
+          - "CODE_OF_CONDUCT.md"
+          - "prd.md"
+          - "CONTEXT.md"
+          - "**/*.md"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "package-lock.json"

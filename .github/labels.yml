@@ -1,0 +1,47 @@
+- name: bug
+  color: "D73A4A"
+  description: Reproducible defect or regression
+
+- name: enhancement
+  color: "A2EEEF"
+  description: New feature or improvement request
+
+- name: question
+  color: "D876E3"
+  description: Usage or development question
+
+- name: cli
+  color: "1D76DB"
+  description: CLI command, output, or help changes
+
+- name: indexing
+  color: "5319E7"
+  description: Ingest, chunking, source, or vector index changes
+
+- name: mcp
+  color: "0E8A16"
+  description: MCP server or tool changes
+
+- name: ci/cd
+  color: "BFD4F2"
+  description: CI/CD and workflow automation changes
+
+- name: docs
+  color: "0075CA"
+  description: Documentation updates
+
+- name: dependencies
+  color: "FBCA04"
+  description: Dependency and lockfile updates
+
+- name: security
+  color: "B60205"
+  description: Security-sensitive work
+
+- name: priority/high
+  color: "D93F0B"
+  description: High priority work item
+
+- name: do-not-close
+  color: "000000"
+  description: Prevent stale automation closure

@@ -2,6 +2,23 @@
   "name": "kbx",
   "version": "0.1.0",
   "description": "Local-first knowledge base CLI for searchable AI context.",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-base",
+    "rag",
+    "mcp",
+    "local-first",
+    "vector-search",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lord007tn/kbx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lord007tn/kbx/issues"
+  },
+  "homepage": "https://github.com/lord007tn/kbx#readme",
   "type": "module",
   "bin": {
     "kbx": "./dist/cli.mjs"
