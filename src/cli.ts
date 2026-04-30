@@ -5,7 +5,7 @@ import path from "node:path";
 import { getConfigValue, listConfigValues, setConfigValue } from "./config.js";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor.js";
 import { directorySizeBytes, formatBytes } from "./io.js";
-import { ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
 import { runMcpServer } from "./mcp.js";
 import { MODEL_CATALOG, resolveModel } from "./models.js";
 import { searchWorkspace } from "./search.js";
@@ -372,7 +372,7 @@ modelCommand
 
     if (options.reindex === true) {
       for (const source of sources) {
-        await ingestWorkspaceTarget(workspace, path.resolve(workspace.root, source.path));
+        await ingestSource(workspace, source);
       }
     }
 

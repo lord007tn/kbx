@@ -4,7 +4,7 @@ import { listIndexableFiles } from "./files.js";
 import { readJson, writeJson } from "./io.js";
 import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace.js";
 import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources.js";
-import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats } from "./types.js";
+import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry } from "./types.js";
 import { ChunkVectorStore } from "./vector-store.js";
 import { rm } from "node:fs/promises";
 
@@ -16,14 +16,18 @@ export interface IngestResult {
 }
 
 export async function ingestWorkspaceTarget(workspace: Workspace, target: string, options: { allowExternal?: boolean } = {}): Promise<IngestResult> {
-  const [manifest, config, existingSources] = await Promise.all([
-    loadManifest(workspace),
-    loadConfig(workspace),
-    loadSources(workspace)
-  ]);
+  const existingSources = await loadSources(workspace);
   const source = await sourceForIngestTarget(workspace, target, options.allowExternal === true);
   const sources = normalizeSources([...existingSources, source]);
   await saveSources(workspace, sources);
+  return ingestSource(workspace, source);
+}
+
+export async function ingestSource(workspace: Workspace, source: SourceEntry): Promise<IngestResult> {
+  const [manifest, config] = await Promise.all([
+    loadManifest(workspace),
+    loadConfig(workspace)
+  ]);
 
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
   const files = await listIndexableFiles(workspace.root, source.path);
