@@ -10,9 +10,13 @@ test("listIndexableFiles includes text/code files and excludes built artifacts",
   try {
     await mkdir(path.join(root, "src"), { recursive: true });
     await mkdir(path.join(root, "dist"), { recursive: true });
+    await mkdir(path.join(root, ".agents", "skills"), { recursive: true });
+    await mkdir(path.join(root, ".claude", "skills"), { recursive: true });
     await writeFile(path.join(root, "notes.md"), "# Notes\n", "utf8");
     await writeFile(path.join(root, "src", "index.ts"), "export const value = 1;\n", "utf8");
     await writeFile(path.join(root, "dist", "bundle.js"), "generated();\n", "utf8");
+    await writeFile(path.join(root, ".agents", "skills", "README.md"), "# Agent Skill\n", "utf8");
+    await writeFile(path.join(root, ".claude", "skills", "README.md"), "# Claude Skill\n", "utf8");
     await writeFile(path.join(root, "image.png"), "not really an image", "utf8");
 
     const files = await listIndexableFiles(root, ".");
@@ -58,6 +62,46 @@ test("listIndexableFiles applies include, exclude, and gitignore overrides", asy
 
     const withoutGitignore = await listIndexableFiles(root, ".", { useGitignore: false });
     assert.equal(withoutGitignore.some((file) => file.relativePath === "notes/ignored.md"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listIndexableFiles preserves gitignore negation patterns", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));
+  try {
+    await writeFile(path.join(root, ".gitignore"), "*.md\n!keep.md\n", "utf8");
+    await writeFile(path.join(root, "keep.md"), "# Keep\n", "utf8");
+    await writeFile(path.join(root, "skip.md"), "# Skip\n", "utf8");
+
+    const files = await listIndexableFiles(root, ".");
+    assert.deepEqual(files.map((file) => file.relativePath), ["keep.md"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listIndexableFiles pushes narrow includes into target-scoped scans", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));
+  try {
+    await mkdir(path.join(root, "docs", "drafts"), { recursive: true });
+    await mkdir(path.join(root, "docs", "nested"), { recursive: true });
+    await mkdir(path.join(root, "src"), { recursive: true });
+    await writeFile(path.join(root, "docs", "README.md"), "# Docs\n", "utf8");
+    await writeFile(path.join(root, "docs", "nested", "README.md"), "# Nested\n", "utf8");
+    await writeFile(path.join(root, "docs", "drafts", "README.md"), "# Draft\n", "utf8");
+    await writeFile(path.join(root, "docs", "guide.md"), "# Guide\n", "utf8");
+    await writeFile(path.join(root, "src", "README.md"), "# Src\n", "utf8");
+
+    const docsReadmes = await listIndexableFiles(root, "docs", {
+      include: ["README.md"],
+      exclude: ["drafts/**"]
+    });
+
+    assert.deepEqual(docsReadmes.map((file) => file.relativePath), [
+      "docs/README.md",
+      "docs/nested/README.md"
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

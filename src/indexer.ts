@@ -18,31 +18,53 @@ export interface IngestResult {
   deleted: number;
 }
 
+export type IngestProgressEvent =
+  | { phase: "prepare"; target: string }
+  | { phase: "scan-start"; source: string }
+  | { phase: "scan-complete"; source: string; totalFiles: number }
+  | { phase: "delete"; source: string; processedFiles: number; deletedFiles: number }
+  | { phase: "file"; source: string; file: string; processedFiles: number; totalFiles: number; insertedChunks: number; skippedFiles: number; deletedFiles: number }
+  | { phase: "complete"; source: string; totalFiles: number; insertedChunks: number; skippedFiles: number; deletedFiles: number };
+
+export interface IngestProgressOptions {
+  onProgress?: (event: IngestProgressEvent) => void | Promise<void>;
+}
+
+export interface IngestWorkspaceTargetOptions extends IngestProgressOptions {
+  allowExternal?: boolean;
+  include?: string[];
+  exclude?: string[];
+  noGitignore?: boolean;
+}
+
 export async function ingestWorkspaceTarget(
   workspace: Workspace,
   target: string,
-  options: { allowExternal?: boolean; include?: string[]; exclude?: string[]; noGitignore?: boolean } = {}
+  options: IngestWorkspaceTargetOptions = {}
 ): Promise<IngestResult> {
   const existingSources = await loadSources(workspace);
+  await options.onProgress?.({ phase: "prepare", target });
   const source = await sourceForIngestTarget(workspace, target, options);
   const sources = normalizeSources([...existingSources, source]);
   await saveSources(workspace, sources);
-  return ingestSource(workspace, source);
+  return ingestSource(workspace, source, options);
 }
 
-export async function ingestSource(workspace: Workspace, source: SourceEntry): Promise<IngestResult> {
+export async function ingestSource(workspace: Workspace, source: SourceEntry, options: IngestProgressOptions = {}): Promise<IngestResult> {
   const [manifest, config] = await Promise.all([
     loadManifest(workspace),
     loadConfig(workspace)
   ]);
 
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+  await options.onProgress?.({ phase: "scan-start", source: source.path });
   const files = await listIndexableFileEntries(workspace.root, source.path, {
     includeKbxImports: source.kind === "external_import",
     include: source.include,
     exclude: source.exclude,
     useGitignore: source.no_gitignore === true ? false : true
   });
+  await options.onProgress?.({ phase: "scan-complete", source: source.path, totalFiles: files.length });
   const currentFilePaths = new Set(files.map((file) => file.relativePath));
   const embedder = createEmbedder(manifest.model, manifest.dim);
   const store = await ChunkVectorStore.open(workspace, manifest.dim);
@@ -56,18 +78,54 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
         store.deleteSource(filePath);
         delete stats.files[filePath];
         deleted += 1;
+        await options.onProgress?.({
+          phase: "delete",
+          source: source.path,
+          processedFiles: files.length,
+          deletedFiles: deleted
+        });
       }
     }
 
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
       const existingFile = stats.files[file.relativePath];
       if (existingFile && existingFile.mtime === file.mtime) {
         skipped += 1;
+        await options.onProgress?.({
+          phase: "file",
+          source: source.path,
+          file: file.relativePath,
+          processedFiles: index + 1,
+          totalFiles: files.length,
+          insertedChunks,
+          skippedFiles: skipped,
+          deletedFiles: deleted
+        });
         continue;
       }
 
       store.deleteSource(file.relativePath);
-      const content = await readFile(file.absolutePath, "utf8");
+      let content: string;
+      try {
+        content = await readFile(file.absolutePath, "utf8");
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          throw error;
+        }
+        delete stats.files[file.relativePath];
+        deleted += 1;
+        await options.onProgress?.({
+          phase: "file",
+          source: source.path,
+          file: file.relativePath,
+          processedFiles: index + 1,
+          totalFiles: files.length,
+          insertedChunks,
+          skippedFiles: skipped,
+          deletedFiles: deleted
+        });
+        continue;
+      }
 
       const isMarkdown = file.extension === ".md" || file.extension === ".mdx";
       const textChunks = isMarkdown && config.chunk.strategy === "heading"
@@ -103,6 +161,16 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
         mtime: file.mtime,
         chunks: textChunks.length
       };
+      await options.onProgress?.({
+        phase: "file",
+        source: source.path,
+        file: file.relativePath,
+        processedFiles: index + 1,
+        totalFiles: files.length,
+        insertedChunks,
+        skippedFiles: skipped,
+        deletedFiles: deleted
+      });
     }
 
     const nextStats: IndexStats = {
@@ -115,12 +183,21 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
     await writeJson(workspace.statsPath, nextStats);
     await touchManifest(workspace);
 
-    return {
+    const result = {
       files: files.length,
       chunks: insertedChunks,
       skipped,
       deleted
     };
+    await options.onProgress?.({
+      phase: "complete",
+      source: source.path,
+      totalFiles: files.length,
+      insertedChunks,
+      skippedFiles: skipped,
+      deletedFiles: deleted
+    });
+    return result;
   } finally {
     store.close();
   }
@@ -382,4 +459,10 @@ function relativeToSource(sourcePath: string, filePath: string): string {
 
 function isKbxImport(filePath: string): boolean {
   return filePath === ".kbx/imports" || filePath.startsWith(".kbx/imports/");
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error
+    && "code" in error
+    && ((error as { code?: unknown }).code === "ENOENT" || (error as { code?: unknown }).code === "ENOTDIR");
 }

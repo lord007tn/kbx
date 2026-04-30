@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ingestSource, loadIndexStats, rebuildWorkspaceIndexForModel, removeSource } from "../src/indexer";
+import { ingestSource, loadIndexStats, rebuildWorkspaceIndexForModel, removeSource, type IngestProgressEvent } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { SCHEMA_VERSION, type SourceEntry, type WorkspaceManifest } from "../src/types";
 import { defaultConfig, loadManifest, workspaceFromRoot } from "../src/workspace";
@@ -90,6 +90,78 @@ test("removeSource can delete an external import snapshot", async () => {
 
     assert.equal(result.deletedImportSnapshot, true);
     await assert.rejects(() => readFile(path.join(workspace.kbxDir, "imports", "abc", "files", "note.md")), /ENOENT/);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ingestSource reports scan and per-file progress", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-ingest-progress-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "a.md"), "# Alpha\n\nalpha beta gamma\n", "utf8");
+    await writeFile(path.join(root, "b.md"), "# Beta\n\nbeta gamma delta\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    const events: IngestProgressEvent[] = [];
+
+    await ingestSource(workspace, source, {
+      onProgress: (event) => {
+        events.push(event);
+      }
+    });
+
+    assert.deepEqual(events.map((event) => event.phase), ["scan-start", "scan-complete", "file", "file", "complete"]);
+    const scanComplete = events[1];
+    assert.equal(scanComplete?.phase, "scan-complete");
+    assert.equal(scanComplete.totalFiles, 2);
+    const fileEvents = events.filter((event): event is Extract<IngestProgressEvent, { phase: "file" }> => event.phase === "file");
+    assert.deepEqual(fileEvents.map((event) => event.processedFiles), [1, 2]);
+    const complete = events.at(-1);
+    assert.equal(complete?.phase, "complete");
+    assert.equal(complete.totalFiles, 2);
+    assert.ok(complete.insertedChunks > 0);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ingestSource skips files deleted after scanning", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-ingest-deleted-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const stablePath = path.join(root, "stable.md");
+    const deletedPath = path.join(root, "deleted.md");
+    await writeFile(stablePath, "# Stable\n\nalpha beta gamma\n", "utf8");
+    await writeFile(deletedPath, "# Deleted\n\nthis file goes away\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    let removed = false;
+
+    const result = await ingestSource(workspace, source, {
+      onProgress: async (event) => {
+        if (event.phase === "scan-complete" && !removed) {
+          removed = true;
+          await rm(deletedPath, { force: true });
+        }
+      }
+    });
+
+    assert.equal(result.files, 2);
+    assert.equal(result.deleted, 1);
+    const stats = await loadIndexStats(workspace, "old-model", 3);
+    assert.equal("stable.md" in stats.files, true);
+    assert.equal("deleted.md" in stats.files, false);
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });

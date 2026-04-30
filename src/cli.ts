@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { confirm, isCancel } from "@clack/prompts";
+import { confirm, isCancel, progress, spinner, type ProgressResult, type SpinnerResult } from "@clack/prompts";
 import { Command } from "commander";
 import path from "node:path";
 import { getConfigValue, listConfigValues, setConfigValue } from "./config";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
-import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, removeSource, resetWorkspaceIndex, resolveSourceEntry } from "./indexer";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, removeSource, resetWorkspaceIndex, resolveSourceEntry, type IngestProgressEvent, type IngestResult } from "./indexer";
 import { runMcpServer } from "./mcp";
 import { MODEL_CATALOG, resolveModel } from "./models";
 import { searchWorkspace } from "./search";
@@ -111,12 +111,20 @@ Notes:
     }
 
     const absoluteTarget = path.resolve(targetPath);
-    const result = await ingestWorkspaceTarget(workspace, absoluteTarget, {
-      allowExternal: options.allowExternal,
-      include: options.include,
-      exclude: options.exclude,
-      noGitignore: options.gitignore === false
-    });
+    const ingestProgress = createIngestProgress();
+    let result: IngestResult;
+    try {
+      result = await ingestWorkspaceTarget(workspace, absoluteTarget, {
+        allowExternal: options.allowExternal,
+        include: options.include,
+        exclude: options.exclude,
+        noGitignore: options.gitignore === false,
+        onProgress: ingestProgress?.onProgress
+      });
+    } catch (error) {
+      ingestProgress?.error();
+      throw error;
+    }
     console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
 
     if (options.watch === true) {
@@ -560,6 +568,130 @@ program.parseAsync().catch((error: unknown) => {
   }
   process.exitCode = 1;
 });
+
+interface CliIngestProgress {
+  onProgress: (event: IngestProgressEvent) => void;
+  error: () => void;
+}
+
+function createIngestProgress(): CliIngestProgress | undefined {
+  if (process.stderr.isTTY !== true) {
+    return undefined;
+  }
+
+  let spin: SpinnerResult | null = null;
+  let bar: ProgressResult | null = null;
+  let advancedFiles = 0;
+  let spinStarted = false;
+
+  const activeSpinner = () => {
+    spin ??= spinner({ output: process.stderr });
+    return spin;
+  };
+
+  const startOrUpdateSpinner = (message: string) => {
+    const current = activeSpinner();
+    if (spinStarted) {
+      current.message(message);
+      return;
+    }
+    current.start(message);
+    spinStarted = true;
+  };
+
+  const onProgress = (event: IngestProgressEvent) => {
+    switch (event.phase) {
+      case "prepare": {
+        startOrUpdateSpinner(`Preparing ${shortPath(event.target)}...`);
+        return;
+      }
+      case "scan-start": {
+        startOrUpdateSpinner(`Scanning ${event.source}...`);
+        return;
+      }
+      case "scan-complete": {
+        if (event.totalFiles === 0) {
+          spin?.stop(`No indexable files found in ${event.source}.`);
+          spin = null;
+          spinStarted = false;
+          return;
+        }
+
+        spin?.stop(`Found ${event.totalFiles} indexable file(s).`);
+        spin = null;
+        spinStarted = false;
+        bar = progress({ max: event.totalFiles, output: process.stderr });
+        advancedFiles = 0;
+        bar.start(`Indexing 0/${event.totalFiles} file(s)`);
+        return;
+      }
+      case "delete": {
+        bar?.message(`Cleaning deleted files (${event.deletedFiles})...`);
+        return;
+      }
+      case "file": {
+        if (!bar) {
+          return;
+        }
+        const step = event.processedFiles - advancedFiles;
+        advancedFiles = event.processedFiles;
+        const message = ingestProgressMessage(event);
+        if (step > 0) {
+          bar.advance(step, message);
+        } else {
+          bar.message(message);
+        }
+        return;
+      }
+      case "complete": {
+        if (bar) {
+          const remaining = event.totalFiles - advancedFiles;
+          if (remaining > 0) {
+            bar.advance(remaining, ingestCompleteMessage(event));
+          }
+          bar.stop(ingestCompleteMessage(event));
+          bar = null;
+        } else {
+          spin?.stop(ingestCompleteMessage(event));
+          spin = null;
+          spinStarted = false;
+        }
+        return;
+      }
+    }
+  };
+
+  return {
+    onProgress,
+    error: () => {
+      bar?.error("Ingest failed.");
+      bar = null;
+      spin?.error("Ingest failed.");
+      spin = null;
+      spinStarted = false;
+    }
+  };
+}
+
+function ingestProgressMessage(event: Extract<IngestProgressEvent, { phase: "file" }>): string {
+  const changed = event.processedFiles - event.skippedFiles;
+  return `Indexing ${event.processedFiles}/${event.totalFiles} file(s), ${changed} changed, ${event.skippedFiles} unchanged`;
+}
+
+function ingestCompleteMessage(event: Extract<IngestProgressEvent, { phase: "complete" }>): string {
+  return `Indexed ${event.totalFiles} file(s), ${event.insertedChunks} new chunk(s), ${event.skippedFiles} unchanged.`;
+}
+
+function shortPath(value: string): string {
+  const relative = path.relative(process.cwd(), value);
+  if (relative === "") {
+    return ".";
+  }
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return relative;
+  }
+  return value;
+}
 
 function isCommanderExit(error: unknown): error is Error & { exitCode: number } {
   return error instanceof Error
