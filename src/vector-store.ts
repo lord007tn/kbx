@@ -79,6 +79,10 @@ export class ChunkVectorStore {
     assertStatus(status);
   }
 
+  destroy(): void {
+    this.collection.destroySync();
+  }
+
   search(vector: number[], topK: number): SearchHit[] {
     const docs = this.collection.querySync({
       fieldName: "embedding",

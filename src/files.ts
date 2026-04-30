@@ -4,7 +4,44 @@ import fg from "fast-glob";
 import ignore from "ignore";
 import { toPosixPath } from "./io.js";
 
-const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx"]);
+const INDEXABLE_EXTENSIONS = new Set([
+  ".md",
+  ".mdx",
+  ".txt",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".go",
+  ".rs",
+  ".java",
+  ".c",
+  ".cc",
+  ".cpp",
+  ".h",
+  ".hpp",
+  ".cs",
+  ".rb",
+  ".php",
+  ".swift",
+  ".kt",
+  ".kts",
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".ps1",
+  ".sql",
+  ".html",
+  ".css",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".xml"
+]);
 const DEFAULT_EXCLUDES = [
   ".git/**",
   ".kbx/**",
@@ -20,11 +57,12 @@ const DEFAULT_EXCLUDES = [
 export interface SourceFile {
   absolutePath: string;
   relativePath: string;
+  extension: string;
   mtime: number;
   content: string;
 }
 
-export async function listMarkdownFiles(workspaceRoot: string, targetRelativePath: string): Promise<SourceFile[]> {
+export async function listIndexableFiles(workspaceRoot: string, targetRelativePath: string): Promise<SourceFile[]> {
   const targetPath = path.resolve(workspaceRoot, targetRelativePath);
   const targetInfo = await stat(targetPath);
   const entries = targetInfo.isDirectory()
@@ -43,7 +81,8 @@ export async function listMarkdownFiles(workspaceRoot: string, targetRelativePat
     const absolutePath = targetInfo.isDirectory() ? path.join(targetPath, entry) : targetPath;
     const relativePath = toPosixPath(path.relative(workspaceRoot, absolutePath));
 
-    if (!MARKDOWN_EXTENSIONS.has(path.extname(absolutePath).toLowerCase())) {
+    const extension = path.extname(absolutePath).toLowerCase();
+    if (!INDEXABLE_EXTENSIONS.has(extension)) {
       continue;
     }
 
@@ -55,6 +94,7 @@ export async function listMarkdownFiles(workspaceRoot: string, targetRelativePat
     files.push({
       absolutePath,
       relativePath,
+      extension,
       mtime: Math.floor(fileInfo.mtimeMs),
       content
     });

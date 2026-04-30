@@ -6,6 +6,7 @@ export interface ChunkInput {
   content: string;
   maxChars: number;
   overlapChars: number;
+  stripFrontmatter?: boolean;
 }
 
 export interface TextChunk {
@@ -15,8 +16,15 @@ export interface TextChunk {
 }
 
 export function chunkMarkdown(input: ChunkInput): TextChunk[] {
-  const parsed = matter(input.content);
-  const text = parsed.content.replace(/\r\n/g, "\n").trim();
+  return chunkText({
+    ...input,
+    stripFrontmatter: true
+  });
+}
+
+export function chunkText(input: ChunkInput): TextChunk[] {
+  const content = input.stripFrontmatter === true ? matter(input.content).content : input.content;
+  const text = content.replace(/\r\n/g, "\n").trim();
   if (text.length === 0) {
     return [];
   }

@@ -2,9 +2,21 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { Command } from "commander";
 import path from "node:path";
-import { ingestWorkspaceTarget, loadIndexStats } from "./indexer.js";
+import { runDoctor } from "./doctor.js";
+import { directorySizeBytes, formatBytes } from "./io.js";
+import { ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
 import { searchWorkspace } from "./search.js";
-import { findWorkspace, initWorkspace, loadManifest, registryPath, workspaceFromRoot } from "./workspace.js";
+import {
+  deleteWorkspaceKnowledgeBase,
+  findWorkspace,
+  forgetWorkspace,
+  initWorkspace,
+  loadManifest,
+  loadRegistry,
+  loadSources,
+  registryPath,
+  workspaceFromRoot
+} from "./workspace.js";
 import { ChunkVectorStore } from "./vector-store.js";
 
 const program = new Command();
@@ -27,7 +39,7 @@ program
 
 program
   .command("ingest")
-  .description("Index markdown files in this workspace.")
+  .description("Index text-like files in this workspace.")
   .argument("[path]", "workspace path to ingest", ".")
   .action(async (targetPath: string) => {
     const workspace = await findWorkspace(process.cwd()) ?? await maybeInitWorkspace();
@@ -37,7 +49,7 @@ program
 
     const absoluteTarget = path.resolve(targetPath);
     const result = await ingestWorkspaceTarget(workspace, absoluteTarget);
-    console.log(`Indexed ${result.files} markdown file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
+    console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
   });
 
 program
@@ -74,6 +86,7 @@ program
     }
     const manifest = await loadManifest(workspace);
     const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+    const indexSize = await directorySizeBytes(workspace.collectionDir);
     let chunkCount = 0;
     try {
       const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
@@ -89,8 +102,128 @@ program
     console.log(`Model: ${manifest.model} (${manifest.dim}d)`);
     console.log(`Documents: ${Object.keys(stats.files).length}`);
     console.log(`Chunks: ${chunkCount}`);
+    console.log(`Index size: ${formatBytes(indexSize)}`);
     console.log(`Last ingest: ${stats.last_ingest_at || "never"}`);
     console.log(`Registry: ${registryPath()}`);
+  });
+
+program
+  .command("reset")
+  .description("Clear current workspace index, preserving config and identity.")
+  .option("-y, --yes", "skip confirmation")
+  .action(async (options: { yes?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const ok = options.yes === true || await confirmAction("Clear the current workspace index?");
+    if (!ok) {
+      console.log("Cancelled.");
+      return;
+    }
+
+    await resetWorkspaceIndex(workspace);
+    console.log("Reset workspace index.");
+  });
+
+const workspaceCommand = program
+  .command("workspace")
+  .description("Manage registered workspaces.");
+
+workspaceCommand
+  .command("list")
+  .description("List registered workspaces.")
+  .action(async () => {
+    const registry = await loadRegistry();
+    if (registry.length === 0) {
+      console.log("No registered workspaces.");
+      return;
+    }
+
+    for (const entry of registry) {
+      console.log(`${entry.workspace_id.slice(0, 8)}  ${entry.name}  ${entry.path}`);
+    }
+  });
+
+workspaceCommand
+  .command("forget")
+  .description("Remove a workspace from the registry only.")
+  .argument("<selector>", "workspace ID, unique name, or path")
+  .action(async (selector: string) => {
+    const entry = await forgetWorkspace(selector);
+    console.log(`Forgot ${entry.name} (${entry.workspace_id.slice(0, 8)}).`);
+  });
+
+workspaceCommand
+  .command("delete")
+  .description("Delete a workspace .kbx/ directory after confirmation.")
+  .argument("<selector>", "workspace ID, unique name, or path")
+  .option("-y, --yes", "skip confirmation")
+  .action(async (selector: string, options: { yes?: boolean }) => {
+    const ok = options.yes === true || await confirmAction(`Delete .kbx/ for "${selector}"?`);
+    if (!ok) {
+      console.log("Cancelled.");
+      return;
+    }
+
+    const entry = await deleteWorkspaceKnowledgeBase(selector);
+    console.log(`Deleted knowledge base for ${entry.name} (${entry.workspace_id.slice(0, 8)}).`);
+  });
+
+const sourcesCommand = program
+  .command("sources")
+  .description("Manage ingest sources.");
+
+sourcesCommand
+  .command("list")
+  .description("List ingest roots.")
+  .action(async () => {
+    const workspace = await requireWorkspace();
+    const sources = await loadSources(workspace);
+    if (sources.length === 0) {
+      console.log("No sources.");
+      return;
+    }
+
+    for (const [index, source] of sources.entries()) {
+      console.log(`${index + 1}. ${source.path} (${source.kind})`);
+    }
+  });
+
+sourcesCommand
+  .command("remove")
+  .description("Remove a source entry and its indexed chunks.")
+  .argument("<selector>", "source index or path")
+  .option("-y, --yes", "skip confirmation")
+  .action(async (selector: string, options: { yes?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const ok = options.yes === true || await confirmAction(`Remove source "${selector}" and its indexed chunks?`);
+    if (!ok) {
+      console.log("Cancelled.");
+      return;
+    }
+
+    const result = await removeSource(workspace, selector);
+    console.log(`Removed source ${result.source}; deleted chunks for ${result.removedFiles} file(s).`);
+  });
+
+program
+  .command("doctor")
+  .description("Diagnose environment and workspace health.")
+  .option("--fresh", "scan source files for stale/deleted/new files")
+  .option("--bench", "run a small local embedding benchmark")
+  .option("--deep", "include freshness scan and benchmark")
+  .action(async (options: { fresh?: boolean; bench?: boolean; deep?: boolean }) => {
+    const workspace = await findWorkspace(process.cwd());
+    const lines = await runDoctor(workspace, {
+      fresh: options.fresh === true || options.deep === true,
+      bench: options.bench === true || options.deep === true
+    });
+
+    for (const line of lines) {
+      console.log(`${line.ok ? "ok" : "fail"}  ${line.label}: ${line.detail}`);
+    }
+
+    if (lines.some((line) => !line.ok)) {
+      process.exitCode = 1;
+    }
   });
 
 program.exitOverride();
@@ -117,6 +250,26 @@ async function maybeInitWorkspace() {
     return null;
   }
   return initWorkspace(workspaceFromRoot(process.cwd()).root);
+}
+
+async function requireWorkspace() {
+  const workspace = await findWorkspace(process.cwd());
+  if (!workspace) {
+    throw new Error("No kbx workspace found. Run kbx init first.");
+  }
+  return workspace;
+}
+
+async function confirmAction(message: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new Error("Confirmation required. Re-run with --yes in non-interactive mode.");
+  }
+
+  const result = await confirm({
+    message,
+    initialValue: false
+  });
+  return !isCancel(result) && result === true;
 }
 
 function parsePositiveInteger(value: string): number {

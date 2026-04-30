@@ -1,5 +1,5 @@
 import { createId } from "@paralleldrive/cuid2";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -125,11 +125,61 @@ export function registryPath(): string {
   return path.join(os.homedir(), ".kbx", "registry.json");
 }
 
+export async function loadRegistry(): Promise<RegistryEntry[]> {
+  const registryFile = registryPath();
+  if (!(await exists(registryFile))) {
+    return [];
+  }
+  return readJson<RegistryEntry[]>(registryFile);
+}
+
+export async function saveRegistry(registry: RegistryEntry[]): Promise<void> {
+  await writeJson(registryPath(), registry);
+}
+
+export async function forgetWorkspace(selector: string): Promise<RegistryEntry> {
+  const registry = await loadRegistry();
+  const selected = resolveWorkspaceSelector(registry, selector);
+  await saveRegistry(registry.filter((entry) => entry.workspace_id !== selected.workspace_id));
+  return selected;
+}
+
+export async function deleteWorkspaceKnowledgeBase(selector: string): Promise<RegistryEntry> {
+  const selected = await forgetWorkspace(selector);
+  await rm(path.join(selected.path, ".kbx"), { recursive: true, force: true });
+  return selected;
+}
+
+export function resolveWorkspaceSelector(registry: RegistryEntry[], selector: string): RegistryEntry {
+  const resolvedPath = path.resolve(selector);
+  const byPath = registry.filter((entry) => path.resolve(entry.path) === resolvedPath);
+  if (byPath.length === 1) {
+    return byPath[0]!;
+  }
+
+  const byId = registry.filter((entry) => entry.workspace_id === selector || entry.workspace_id.startsWith(selector));
+  if (byId.length === 1) {
+    return byId[0]!;
+  }
+  if (byId.length > 1) {
+    throw new Error(`Workspace selector "${selector}" matches multiple workspace IDs. Use a longer ID.`);
+  }
+
+  const byName = registry.filter((entry) => entry.name === selector);
+  if (byName.length === 1) {
+    return byName[0]!;
+  }
+  if (byName.length > 1) {
+    throw new Error(`Workspace name "${selector}" is ambiguous. Use workspace ID or path.`);
+  }
+
+  throw new Error(`No registered workspace matches "${selector}".`);
+}
+
 async function registerWorkspace(workspace: Workspace): Promise<void> {
   const manifest = await loadManifest(workspace);
   const now = new Date().toISOString();
-  const registryFile = registryPath();
-  const registry = (await exists(registryFile)) ? await readJson<RegistryEntry[]>(registryFile) : [];
+  const registry = await loadRegistry();
   const nextEntry: RegistryEntry = {
     workspace_id: manifest.workspace_id,
     name: manifest.name,
@@ -139,7 +189,7 @@ async function registerWorkspace(workspace: Workspace): Promise<void> {
   };
   const next = registry.filter((entry) => entry.workspace_id !== manifest.workspace_id);
   next.push(nextEntry);
-  await writeJson(registryFile, next);
+  await saveRegistry(next);
 }
 
 async function exists(filePath: string): Promise<boolean> {
