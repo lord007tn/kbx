@@ -5,7 +5,7 @@ import zvec, {
   type ZVecDoc,
   type ZVecStatus
 } from "@zvec/zvec";
-import type { EmbeddedChunkRecord, SearchHit } from "./types.js";
+import type { ChunkDetail, EmbeddedChunkRecord, SearchHit } from "./types.js";
 import type { Workspace } from "./workspace.js";
 
 const {
@@ -96,6 +96,21 @@ export class ChunkVectorStore {
     });
 
     return docs.map(toSearchHit);
+  }
+
+  getChunk(id: string): ChunkDetail | null {
+    const doc = this.collection.fetchSync(id)[id];
+    if (!doc) {
+      return null;
+    }
+    return {
+      id: doc.id,
+      text: String(doc.fields.text ?? ""),
+      source: String(doc.fields.human_source ?? ""),
+      citation_source: String(doc.fields.citation_source ?? ""),
+      chunk_idx: Number(doc.fields.chunk_idx ?? 0),
+      mtime: Number(doc.fields.mtime ?? 0)
+    };
   }
 
   close(): void {

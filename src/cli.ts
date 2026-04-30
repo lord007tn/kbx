@@ -6,6 +6,7 @@ import { getConfigValue, listConfigValues, setConfigValue } from "./config.js";
 import { runDoctor } from "./doctor.js";
 import { directorySizeBytes, formatBytes } from "./io.js";
 import { ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
+import { runMcpServer } from "./mcp.js";
 import { MODEL_CATALOG, resolveModel } from "./models.js";
 import { searchWorkspace } from "./search.js";
 import {
@@ -79,6 +80,14 @@ program
       console.log(indent(excerpt(hit.text)));
       console.log("");
     }
+  });
+
+program
+  .command("mcp")
+  .description("Run the MCP server over stdio.")
+  .action(async () => {
+    const workspace = await requireWorkspace();
+    await runMcpServer(workspace);
   });
 
 program

@@ -74,3 +74,12 @@ export interface SearchHit {
   score: number;
   text: string;
 }
+
+export interface ChunkDetail {
+  id: string;
+  text: string;
+  source: string;
+  citation_source: string;
+  chunk_idx: number;
+  mtime: number;
+}
