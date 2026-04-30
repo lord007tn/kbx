@@ -1,0 +1,48 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { chunkMarkdown } from "../src/chunk.js";
+
+test("chunkMarkdown removes frontmatter and chunks markdown text", () => {
+  const chunks = chunkMarkdown({
+    source: "notes/example.md",
+    content: "---\ntitle: Example\n---\n# Example\n\nThis is a markdown note with enough content to split cleanly across chunks.",
+    maxChars: 40,
+    overlapChars: 5
+  });
+
+  assert.equal(chunks.length > 1, true);
+  assert.equal(chunks[0]?.chunk_idx, 0);
+  assert.equal(chunks.some((chunk) => chunk.text.includes("title: Example")), false);
+});
+
+test("chunkMarkdown returns stable chunk ids", () => {
+  const first = chunkMarkdown({
+    source: "notes/example.md",
+    content: "# Example\n\nA short note.",
+    maxChars: 800,
+    overlapChars: 100
+  });
+  const second = chunkMarkdown({
+    source: "notes/example.md",
+    content: "# Example\n\nA short note.",
+    maxChars: 800,
+    overlapChars: 100
+  });
+
+  assert.equal(first[0]?.id, second[0]?.id);
+});
+
+test("chunkMarkdown starts overlapped chunks on word boundaries", () => {
+  const chunks = chunkMarkdown({
+    source: "notes/example.md",
+    content: "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    maxChars: 28,
+    overlapChars: 7
+  });
+
+  assert.equal(chunks.length > 1, true);
+  for (const chunk of chunks.slice(1)) {
+    assert.match(chunk.text, /^[a-z]/);
+    assert.doesNotMatch(chunk.text, /^[a-z]{1,2}\s/);
+  }
+});
