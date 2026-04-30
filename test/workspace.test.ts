@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveWorkspaceSelector } from "../src/workspace.js";
-import type { RegistryEntry } from "../src/types.js";
+import { resolveWorkspaceSelector } from "../src/workspace";
+import type { RegistryEntry } from "../src/types";
 
 const registry: RegistryEntry[] = [
   {

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { DEFAULT_MODEL_DIM, DEFAULT_MODEL_ID } from "./types.js";
+import { DEFAULT_MODEL_DIM, DEFAULT_MODEL_ID } from "./types";
 
 export interface Embedder {
   model: string;

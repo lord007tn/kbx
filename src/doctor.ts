@@ -1,17 +1,17 @@
 import { performance } from "node:perf_hooks";
-import { createEmbedder } from "./embedding.js";
-import { listIndexableFileEntries } from "./files.js";
-import { directorySizeBytes, formatBytes } from "./io.js";
-import { loadIndexStats } from "./indexer.js";
-import type { IndexStats } from "./types.js";
+import { createEmbedder } from "./embedding";
+import { listIndexableFileEntries } from "./files";
+import { directorySizeBytes, formatBytes } from "./io";
+import { loadIndexStats } from "./indexer";
+import type { IndexStats } from "./types";
 import {
   loadConfig,
   loadManifest,
   loadRegistry,
   loadSources,
   type Workspace
-} from "./workspace.js";
-import { ChunkVectorStore } from "./vector-store.js";
+} from "./workspace";
+import { ChunkVectorStore } from "./vector-store";
 
 export interface DoctorOptions {
   fresh?: boolean;

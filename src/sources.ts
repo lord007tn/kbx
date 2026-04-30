@@ -1,10 +1,10 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { cp, mkdir, rm, stat } from "node:fs/promises";
-import { writeJson } from "./io.js";
-import type { SourceEntry } from "./types.js";
-import { toPosixPath } from "./io.js";
-import type { Workspace } from "./workspace.js";
+import { writeJson } from "./io";
+import type { SourceEntry } from "./types";
+import { toPosixPath } from "./io";
+import type { Workspace } from "./workspace";
 
 export function sourceForTarget(workspaceRoot: string, target: string): SourceEntry {
   const relative = path.relative(workspaceRoot, target);

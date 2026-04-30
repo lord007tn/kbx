@@ -1,7 +1,7 @@
 import chokidar from "chokidar";
 import path from "node:path";
-import { ingestWorkspaceTarget } from "./indexer.js";
-import { loadSources, type Workspace } from "./workspace.js";
+import { ingestWorkspaceTarget } from "./indexer";
+import { loadSources, type Workspace } from "./workspace";
 
 export async function watchIngest(workspace: Workspace, target?: string): Promise<void> {
   const watchTargets = target ? [target] : await sourceWatchTargets(workspace);

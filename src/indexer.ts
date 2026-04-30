@@ -1,11 +1,11 @@
-import { chunkMarkdown, chunkText } from "./chunk.js";
-import { createEmbedder } from "./embedding.js";
-import { listIndexableFileEntries } from "./files.js";
-import { readJson, writeJson } from "./io.js";
-import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace.js";
-import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources.js";
-import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry } from "./types.js";
-import { ChunkVectorStore } from "./vector-store.js";
+import { chunkMarkdown, chunkText } from "./chunk";
+import { createEmbedder } from "./embedding";
+import { listIndexableFileEntries } from "./files";
+import { readJson, writeJson } from "./io";
+import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace";
+import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources";
+import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry } from "./types";
+import { ChunkVectorStore } from "./vector-store";
 import { readFile, rm } from "node:fs/promises";
 
 const EMBED_BATCH_SIZE = 64;

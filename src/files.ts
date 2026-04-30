@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
-import { toPosixPath } from "./io.js";
+import { toPosixPath } from "./io";
 
 const INDEXABLE_EXTENSIONS = new Set([
   ".md",

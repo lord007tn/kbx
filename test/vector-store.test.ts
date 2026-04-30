@@ -3,8 +3,8 @@ import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ChunkVectorStore } from "../src/vector-store.js";
-import { workspaceFromRoot } from "../src/workspace.js";
+import { ChunkVectorStore } from "../src/vector-store";
+import { workspaceFromRoot } from "../src/workspace";
 
 test("ChunkVectorStore upserts, searches, and deletes chunks", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-vector-store-"));

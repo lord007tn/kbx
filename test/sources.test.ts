@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { coversSource, normalizeSources, sourceForIngestTarget, sourceForTarget } from "../src/sources.js";
-import { workspaceFromRoot } from "../src/workspace.js";
+import { coversSource, normalizeSources, sourceForIngestTarget, sourceForTarget } from "../src/sources";
+import { workspaceFromRoot } from "../src/workspace";
 
 test("sourceForTarget rejects external paths", () => {
   assert.throws(() => {

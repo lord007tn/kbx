@@ -2,14 +2,14 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { Command } from "commander";
 import path from "node:path";
-import { getConfigValue, listConfigValues, setConfigValue } from "./config.js";
-import { benchmarkLine, freshnessLine, runDoctor } from "./doctor.js";
-import { directorySizeBytes, formatBytes } from "./io.js";
-import { ingestSource, ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
-import { runMcpServer } from "./mcp.js";
-import { MODEL_CATALOG, resolveModel } from "./models.js";
-import { searchWorkspace } from "./search.js";
-import { watchIngest } from "./watch.js";
+import { getConfigValue, listConfigValues, setConfigValue } from "./config";
+import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
+import { directorySizeBytes, formatBytes } from "./io";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer";
+import { runMcpServer } from "./mcp";
+import { MODEL_CATALOG, resolveModel } from "./models";
+import { searchWorkspace } from "./search";
+import { watchIngest } from "./watch";
 import {
   deleteWorkspaceKnowledgeBase,
   findWorkspace,
@@ -23,8 +23,8 @@ import {
   saveConfig,
   saveManifest,
   workspaceFromRoot
-} from "./workspace.js";
-import { ChunkVectorStore } from "./vector-store.js";
+} from "./workspace";
+import { ChunkVectorStore } from "./vector-store";
 
 const program = new Command();
 
@@ -382,6 +382,10 @@ modelCommand
 program.exitOverride();
 
 program.parseAsync().catch((error: unknown) => {
+  if (isCommanderExit(error) && error.exitCode === 0) {
+    return;
+  }
+
   if (error instanceof Error) {
     console.error(`Error: ${error.message}`);
   } else {
@@ -389,6 +393,12 @@ program.parseAsync().catch((error: unknown) => {
   }
   process.exitCode = 1;
 });
+
+function isCommanderExit(error: unknown): error is Error & { exitCode: number } {
+  return error instanceof Error
+    && "exitCode" in error
+    && typeof (error as { exitCode?: unknown }).exitCode === "number";
+}
 
 async function maybeInitWorkspace() {
   if (!process.stdin.isTTY) {

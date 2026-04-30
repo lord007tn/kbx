@@ -1,7 +1,7 @@
-import { createEmbedder } from "./embedding.js";
-import { loadManifest, type Workspace } from "./workspace.js";
-import type { SearchHit } from "./types.js";
-import { ChunkVectorStore } from "./vector-store.js";
+import { createEmbedder } from "./embedding";
+import { loadManifest, type Workspace } from "./workspace";
+import type { SearchHit } from "./types";
+import { ChunkVectorStore } from "./vector-store";
 
 export async function searchWorkspace(workspace: Workspace, query: string, topK: number): Promise<SearchHit[]> {
   const manifest = await loadManifest(workspace);

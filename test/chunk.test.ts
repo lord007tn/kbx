@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkMarkdown } from "../src/chunk.js";
+import { chunkMarkdown } from "../src/chunk";
 
 test("chunkMarkdown removes frontmatter and chunks markdown text", () => {
   const chunks = chunkMarkdown({

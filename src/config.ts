@@ -1,4 +1,4 @@
-import type { WorkspaceConfig } from "./types.js";
+import type { WorkspaceConfig } from "./types";
 
 const CONFIG_KEYS = new Set(["chunk.size", "chunk.overlap", "chunk.strategy", "mcp.citations"]);
 

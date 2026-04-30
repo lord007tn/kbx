@@ -5,8 +5,8 @@ import zvec, {
   type ZVecDoc,
   type ZVecStatus
 } from "@zvec/zvec";
-import type { ChunkDetail, EmbeddedChunkRecord, SearchHit } from "./types.js";
-import type { Workspace } from "./workspace.js";
+import type { ChunkDetail, EmbeddedChunkRecord, SearchHit } from "./types";
+import type { Workspace } from "./workspace";
 
 const {
   ZVecCollectionSchema,

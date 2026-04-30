@@ -10,8 +10,8 @@ import {
   type SourceEntry,
   type WorkspaceConfig,
   type WorkspaceManifest
-} from "./types.js";
-import { readJson, writeJson } from "./io.js";
+} from "./types";
+import { readJson, writeJson } from "./io";
 
 export interface Workspace {
   root: string;

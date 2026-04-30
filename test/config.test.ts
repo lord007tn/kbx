@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getConfigValue, setConfigValue } from "../src/config.js";
-import { defaultConfig } from "../src/workspace.js";
+import { getConfigValue, setConfigValue } from "../src/config";
+import { defaultConfig } from "../src/workspace";
 
 test("config get and set handles known keys", () => {
   const config = setConfigValue(defaultConfig, "chunk.size", "1200");

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listIndexableFiles } from "../src/files.js";
+import { listIndexableFiles } from "../src/files";
 
 test("listIndexableFiles includes text/code files and excludes built artifacts", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));

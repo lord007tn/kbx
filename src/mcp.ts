@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runDoctor } from "./doctor.js";
-import { loadIndexStats } from "./indexer.js";
-import { searchWorkspace } from "./search.js";
-import { loadManifest, loadSources, type Workspace } from "./workspace.js";
-import { ChunkVectorStore } from "./vector-store.js";
+import { runDoctor } from "./doctor";
+import { loadIndexStats } from "./indexer";
+import { searchWorkspace } from "./search";
+import { loadManifest, loadSources, type Workspace } from "./workspace";
+import { ChunkVectorStore } from "./vector-store";
 
 export async function runMcpServer(workspace: Workspace): Promise<void> {
   const server = new McpServer({

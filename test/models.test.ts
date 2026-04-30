@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveModel } from "../src/models.js";
+import { resolveModel } from "../src/models";
 
 test("resolveModel resolves catalog IDs and model names", () => {
   assert.equal(resolveModel("minilm").dim, 384);
