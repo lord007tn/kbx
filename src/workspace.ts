@@ -139,7 +139,11 @@ export async function loadRegistry(): Promise<RegistryEntry[]> {
   if (!(await exists(registryFile))) {
     return [];
   }
-  return readJson<RegistryEntry[]>(registryFile);
+  const registry = await readJson<RegistryEntry[] | RegistryEntry>(registryFile);
+  if (Array.isArray(registry)) {
+    return registry;
+  }
+  return isRegistryEntry(registry) ? [registry] : [];
 }
 
 export async function saveRegistry(registry: RegistryEntry[]): Promise<void> {
@@ -199,6 +203,18 @@ async function registerWorkspace(workspace: Workspace): Promise<void> {
   const next = registry.filter((entry) => entry.workspace_id !== manifest.workspace_id);
   next.push(nextEntry);
   await saveRegistry(next);
+}
+
+function isRegistryEntry(value: unknown): value is RegistryEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<RegistryEntry>;
+  return typeof candidate.workspace_id === "string"
+    && typeof candidate.name === "string"
+    && typeof candidate.path === "string"
+    && typeof candidate.created_at === "string"
+    && typeof candidate.last_seen_at === "string";
 }
 
 async function exists(filePath: string): Promise<boolean> {

@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { createEmbedder } from "./embedding.js";
-import { listIndexableFiles } from "./files.js";
+import { listIndexableFileEntries } from "./files.js";
 import { directorySizeBytes, formatBytes } from "./io.js";
 import { loadIndexStats } from "./indexer.js";
 import type { IndexStats } from "./types.js";
@@ -96,7 +96,7 @@ export async function freshnessLine(workspace: Workspace, stats: IndexStats): Pr
   const sources = await loadSources(workspace);
   const currentFiles = new Map<string, number>();
   for (const source of sources) {
-    for (const file of await listIndexableFiles(workspace.root, source.path)) {
+    for (const file of await listIndexableFileEntries(workspace.root, source.path)) {
       currentFiles.set(file.relativePath, file.mtime);
     }
   }

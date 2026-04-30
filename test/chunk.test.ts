@@ -47,6 +47,18 @@ test("chunkMarkdown starts overlapped chunks on word boundaries", () => {
   }
 });
 
+test("chunkMarkdown makes progress through long runs without whitespace", () => {
+  const chunks = chunkMarkdown({
+    source: "notes/long-token.md",
+    content: "a".repeat(2_500),
+    maxChars: 800,
+    overlapChars: 100
+  });
+
+  assert.equal(chunks.length, 4);
+  assert.equal(chunks.at(-1)?.text.length, 400);
+});
+
 test("chunkMarkdown prefers heading sections before fixed splitting", () => {
   const chunks = chunkMarkdown({
     source: "notes/headings.md",

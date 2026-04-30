@@ -6,3 +6,7 @@ dist/
 .env.*
 *.log
 npm-debug.log*
+
+examples/hf-open-markdown/files/
+examples/hf-open-markdown/.kbx/
+examples/hf-open-markdown/manifest.generated.json

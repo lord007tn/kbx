@@ -1,12 +1,14 @@
 import { chunkMarkdown, chunkText } from "./chunk.js";
 import { createEmbedder } from "./embedding.js";
-import { listIndexableFiles } from "./files.js";
+import { listIndexableFileEntries } from "./files.js";
 import { readJson, writeJson } from "./io.js";
 import { loadConfig, loadManifest, loadSources, saveSources, touchManifest, type Workspace } from "./workspace.js";
 import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources.js";
 import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry } from "./types.js";
 import { ChunkVectorStore } from "./vector-store.js";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
+
+const EMBED_BATCH_SIZE = 64;
 
 export interface IngestResult {
   files: number;
@@ -30,13 +32,13 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
   ]);
 
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
-  const files = await listIndexableFiles(workspace.root, source.path);
+  const files = await listIndexableFileEntries(workspace.root, source.path);
   const currentFilePaths = new Set(files.map((file) => file.relativePath));
   const embedder = createEmbedder(manifest.model, manifest.dim);
   const store = await ChunkVectorStore.open(workspace, manifest.dim);
-  const chunksToEmbed: ChunkRecord[] = [];
   let skipped = 0;
   let deleted = 0;
+  let insertedChunks = 0;
 
   try {
     for (const filePath of Object.keys(stats.files)) {
@@ -55,49 +57,43 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
       }
 
       store.deleteSource(file.relativePath);
+      const content = await readFile(file.absolutePath, "utf8");
 
       const isMarkdown = file.extension === ".md" || file.extension === ".mdx";
       const textChunks = isMarkdown && config.chunk.strategy === "heading"
         ? chunkMarkdown({
             source: file.relativePath,
-            content: file.content,
+            content,
             maxChars: config.chunk.size,
             overlapChars: config.chunk.overlap
           })
         : chunkText({
             source: file.relativePath,
-            content: file.content,
+            content,
             maxChars: config.chunk.size,
             overlapChars: config.chunk.overlap,
             stripFrontmatter: isMarkdown
           });
 
-      for (const chunk of textChunks) {
-        chunksToEmbed.push({
-          id: chunk.id,
-          text: chunk.text,
-          source: file.relativePath,
-          human_source: humanSource(source, file.relativePath),
-          citation_source: citationSource(source, file.relativePath),
-          source_origin: source.kind,
-          chunk_idx: chunk.chunk_idx,
-          mtime: file.mtime,
-          tags: ""
-        });
-      }
+      const chunks: ChunkRecord[] = textChunks.map((chunk) => ({
+        id: chunk.id,
+        text: chunk.text,
+        source: file.relativePath,
+        human_source: humanSource(source, file.relativePath),
+        citation_source: citationSource(source, file.relativePath),
+        source_origin: source.kind,
+        chunk_idx: chunk.chunk_idx,
+        mtime: file.mtime,
+        tags: ""
+      }));
+
+      insertedChunks += await embedAndUpsert(store, embedder, chunks);
 
       stats.files[file.relativePath] = {
         mtime: file.mtime,
         chunks: textChunks.length
       };
     }
-
-    const embeddings = chunksToEmbed.length > 0 ? await embedder.embed(chunksToEmbed.map((chunk) => chunk.text)) : [];
-    const embeddedChunks: EmbeddedChunkRecord[] = chunksToEmbed.map((chunk, index) => ({
-      ...chunk,
-      embedding: embeddings[index] ?? []
-    }));
-    store.upsertChunks(embeddedChunks);
 
     const nextStats: IndexStats = {
       schema_version: SCHEMA_VERSION,
@@ -111,13 +107,32 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry): P
 
     return {
       files: files.length,
-      chunks: embeddedChunks.length,
+      chunks: insertedChunks,
       skipped,
       deleted
     };
   } finally {
     store.close();
   }
+}
+
+async function embedAndUpsert(
+  store: ChunkVectorStore,
+  embedder: ReturnType<typeof createEmbedder>,
+  chunks: ChunkRecord[]
+): Promise<number> {
+  let inserted = 0;
+  for (let start = 0; start < chunks.length; start += EMBED_BATCH_SIZE) {
+    const batch = chunks.slice(start, start + EMBED_BATCH_SIZE);
+    const embeddings = await embedder.embed(batch.map((chunk) => chunk.text));
+    const embeddedChunks: EmbeddedChunkRecord[] = batch.map((chunk, index) => ({
+      ...chunk,
+      embedding: embeddings[index] ?? []
+    }));
+    store.upsertChunks(embeddedChunks);
+    inserted += embeddedChunks.length;
+  }
+  return inserted;
 }
 
 export async function loadIndexStats(workspace: Workspace, model: string, dim: number): Promise<IndexStats> {

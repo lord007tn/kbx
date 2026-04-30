@@ -78,7 +78,10 @@ function buildChunks(input: {
     if (end >= input.text.length) {
       break;
     }
-    start = findChunkStart(input.text, Math.max(end - input.overlapChars, start + 1));
+    const nextStart = findChunkStart(input.text, Math.max(end - input.overlapChars, start + 1));
+    start = nextStart > start
+      ? nextStart
+      : Math.min(end, start + Math.max(1, input.maxChars - input.overlapChars));
   }
 
   return chunks;

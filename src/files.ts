@@ -62,7 +62,14 @@ export interface SourceFile {
   content: string;
 }
 
-export async function listIndexableFiles(workspaceRoot: string, targetRelativePath: string): Promise<SourceFile[]> {
+export interface SourceFileEntry {
+  absolutePath: string;
+  relativePath: string;
+  extension: string;
+  mtime: number;
+}
+
+export async function listIndexableFileEntries(workspaceRoot: string, targetRelativePath: string): Promise<SourceFileEntry[]> {
   const targetPath = path.resolve(workspaceRoot, targetRelativePath);
   const targetInfo = await stat(targetPath);
   const entries = targetInfo.isDirectory()
@@ -75,7 +82,7 @@ export async function listIndexableFiles(workspaceRoot: string, targetRelativePa
     : [path.basename(targetPath)];
 
   const gitignore = await loadGitignore(workspaceRoot);
-  const files: SourceFile[] = [];
+  const files: SourceFileEntry[] = [];
 
   for (const entry of entries) {
     const absolutePath = targetInfo.isDirectory() ? path.join(targetPath, entry) : targetPath;
@@ -90,17 +97,26 @@ export async function listIndexableFiles(workspaceRoot: string, targetRelativePa
       continue;
     }
 
-    const [fileInfo, content] = await Promise.all([stat(absolutePath), readFile(absolutePath, "utf8")]);
+    const fileInfo = await stat(absolutePath);
     files.push({
       absolutePath,
       relativePath,
       extension,
-      mtime: Math.floor(fileInfo.mtimeMs),
-      content
+      mtime: Math.floor(fileInfo.mtimeMs)
     });
   }
 
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}
+
+export async function listIndexableFiles(workspaceRoot: string, targetRelativePath: string): Promise<SourceFile[]> {
+  const entries = await listIndexableFileEntries(workspaceRoot, targetRelativePath);
+  return Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      content: await readFile(entry.absolutePath, "utf8")
+    }))
+  );
 }
 
 function isBuiltInExcluded(relativePath: string): boolean {
