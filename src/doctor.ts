@@ -92,7 +92,7 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
   return lines;
 }
 
-async function freshnessLine(workspace: Workspace, stats: IndexStats): Promise<DoctorLine> {
+export async function freshnessLine(workspace: Workspace, stats: IndexStats): Promise<DoctorLine> {
   const sources = await loadSources(workspace);
   const currentFiles = new Map<string, number>();
   for (const source of sources) {
@@ -127,7 +127,7 @@ async function freshnessLine(workspace: Workspace, stats: IndexStats): Promise<D
   };
 }
 
-async function benchmarkLine(model: string, dim: number): Promise<DoctorLine> {
+export async function benchmarkLine(model: string, dim: number): Promise<DoctorLine> {
   const embedder = createEmbedder(model, dim);
   const samples = [
     "kbx indexes local files for AI knowledge search.",

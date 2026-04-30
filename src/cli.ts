@@ -3,7 +3,7 @@ import { confirm, isCancel } from "@clack/prompts";
 import { Command } from "commander";
 import path from "node:path";
 import { getConfigValue, listConfigValues, setConfigValue } from "./config.js";
-import { runDoctor } from "./doctor.js";
+import { benchmarkLine, freshnessLine, runDoctor } from "./doctor.js";
 import { directorySizeBytes, formatBytes } from "./io.js";
 import { ingestWorkspaceTarget, loadIndexStats, removeSource, resetWorkspaceIndex } from "./indexer.js";
 import { runMcpServer } from "./mcp.js";
@@ -134,7 +134,8 @@ program
 program
   .command("stats")
   .description("Show basic workspace metadata.")
-  .action(async () => {
+  .option("--fresh", "scan source files for stale/deleted/new files")
+  .action(async (options: { fresh?: boolean }) => {
     const workspace = await findWorkspace(process.cwd());
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
@@ -159,6 +160,10 @@ program
     console.log(`Chunks: ${chunkCount}`);
     console.log(`Index size: ${formatBytes(indexSize)}`);
     console.log(`Last ingest: ${stats.last_ingest_at || "never"}`);
+    if (options.fresh === true) {
+      const fresh = await freshnessLine(workspace, stats);
+      console.log(`Freshness: ${fresh.detail}`);
+    }
     console.log(`Registry: ${registryPath()}`);
   });
 
@@ -296,6 +301,35 @@ modelCommand
       const selected = model.model === currentModel ? "yes" : "no";
       console.log(`${model.id.padEnd(11)} ${model.size.padEnd(9)} ${String(model.dim).padEnd(5)} ${model.profile.padEnd(10)} ${selected.padEnd(9)} ${model.description}`);
     }
+  });
+
+modelCommand
+  .command("benchmark")
+  .description("Benchmark the current or selected embedding model.")
+  .argument("[model-id]", "catalog model ID")
+  .option("--all", "benchmark every catalog model after confirmation")
+  .option("-y, --yes", "skip confirmation")
+  .action(async (modelId: string | undefined, options: { all?: boolean; yes?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const manifest = await loadManifest(workspace);
+
+    if (options.all === true) {
+      const ok = options.yes === true || await confirmAction("Benchmarking all models may download large model files. Continue?");
+      if (!ok) {
+        console.log("Cancelled.");
+        return;
+      }
+
+      for (const model of MODEL_CATALOG) {
+        const result = await benchmarkLine(model.model, model.dim);
+        console.log(`${model.id}: ${result.detail}`);
+      }
+      return;
+    }
+
+    const model = modelId ? resolveModel(modelId) : { id: "current", model: manifest.model, dim: manifest.dim };
+    const result = await benchmarkLine(model.model, model.dim);
+    console.log(`${model.id}: ${result.detail}`);
   });
 
 modelCommand
