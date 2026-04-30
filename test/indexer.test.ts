@@ -168,6 +168,22 @@ test("ingestSource skips files deleted after scanning", async () => {
   }
 });
 
+test("loadIndexStats reports corrupt stats instead of treating them as empty", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-stats-corrupt-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(workspace.statsPath, "\0\0\0", "utf8");
+
+    await assert.rejects(
+      () => loadIndexStats(workspace, "old-model", 3),
+      /Invalid JSON/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function manifest(modelName: string, dim: number): WorkspaceManifest {
   return {
     workspace_id: "test-workspace",

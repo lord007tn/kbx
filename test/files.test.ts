@@ -10,11 +10,18 @@ test("listIndexableFiles includes text/code files and excludes built artifacts",
   try {
     await mkdir(path.join(root, "src"), { recursive: true });
     await mkdir(path.join(root, "dist"), { recursive: true });
+    await mkdir(path.join(root, "packages", "site", "node_modules", "dep"), { recursive: true });
+    await mkdir(path.join(root, "packages", "site", "dist"), { recursive: true });
     await mkdir(path.join(root, ".agents", "skills"), { recursive: true });
     await mkdir(path.join(root, ".claude", "skills"), { recursive: true });
     await writeFile(path.join(root, "notes.md"), "# Notes\n", "utf8");
     await writeFile(path.join(root, "src", "index.ts"), "export const value = 1;\n", "utf8");
     await writeFile(path.join(root, "dist", "bundle.js"), "generated();\n", "utf8");
+    await writeFile(path.join(root, "packages", "site", "node_modules", "dep", "index.ts"), "export const dep = true;\n", "utf8");
+    await writeFile(path.join(root, "packages", "site", "dist", "bundle.js"), "generated();\n", "utf8");
+    await writeFile(path.join(root, "package-lock.json"), "{}\n", "utf8");
+    await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
+    await writeFile(path.join(root, "src", "Cargo.lock"), "# lock\n", "utf8");
     await writeFile(path.join(root, ".agents", "skills", "README.md"), "# Agent Skill\n", "utf8");
     await writeFile(path.join(root, ".claude", "skills", "README.md"), "# Claude Skill\n", "utf8");
     await writeFile(path.join(root, "image.png"), "not really an image", "utf8");

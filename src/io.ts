@@ -3,7 +3,12 @@ import path from "node:path";
 
 export async function readJson<T>(filePath: string): Promise<T> {
   const raw = await readFile(filePath, "utf8");
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON in ${filePath}: ${detail}`);
+  }
 }
 
 export async function writeJson(filePath: string, value: unknown): Promise<void> {

@@ -53,8 +53,22 @@ const DEFAULT_EXCLUDES = [
   "build/**",
   ".next/**",
   ".turbo/**",
-  "coverage/**"
+  "coverage/**",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+  "Cargo.lock",
+  "poetry.lock",
+  "uv.lock",
+  "Pipfile.lock",
+  "Gemfile.lock",
+  "composer.lock",
+  "go.sum"
 ];
+const FILE_STAT_CONCURRENCY = 64;
 
 export interface SourceFile {
   absolutePath: string;
@@ -83,6 +97,7 @@ export async function listIndexableFileEntries(
   const gitignore = options.useGitignore === false ? emptyGitignorePolicy() : await loadGitignore(workspaceRoot);
   const globIgnore = globIgnorePatterns([
     ...builtInGlobExcludes(options.includeKbxImports === true),
+    ...safeGitignoreGlobExcludes(options.includeKbxImports === true ? [] : gitignore.patterns),
     ...(options.exclude ?? []),
     ...targetScopedPatterns(normalizedTargetPath, options.exclude ?? [])
   ]);
@@ -100,41 +115,50 @@ export async function listIndexableFileEntries(
   const includeTargetMatcher = ignore().add(targetScopedPatterns(normalizedTargetPath, options.include ?? []));
   const excludeMatcher = ignore().add(options.exclude ?? []);
   const excludeTargetMatcher = ignore().add(targetScopedPatterns(normalizedTargetPath, options.exclude ?? []));
-  const files: SourceFileEntry[] = [];
-
-  for (const entry of entries) {
+  const files = await mapConcurrent(entries, FILE_STAT_CONCURRENCY, async (entry): Promise<SourceFileEntry | null> => {
     const absolutePath = path.join(workspaceRoot, entry);
     const relativePath = toPosixPath(path.relative(workspaceRoot, absolutePath));
     if (!sourceContainsPath(normalizedTargetPath, relativePath)) {
-      continue;
+      return null;
     }
 
     const extension = path.extname(absolutePath).toLowerCase();
     if (!INDEXABLE_EXTENSIONS.has(extension)) {
-      continue;
+      return null;
     }
 
     const isImport = isKbxImport(relativePath);
     if (isBuiltInExcluded(relativePath, options.includeKbxImports === true) || (!isImport && gitignore.ignores(relativePath))) {
-      continue;
+      return null;
     }
     if ((options.include?.length ?? 0) > 0 && !includeMatcher.ignores(relativePath) && !includeTargetMatcher.ignores(relativePath)) {
-      continue;
+      return null;
     }
     if (excludeMatcher.ignores(relativePath) || excludeTargetMatcher.ignores(relativePath)) {
-      continue;
+      return null;
     }
 
-    const fileInfo = await stat(absolutePath);
-    files.push({
+    let fileInfo;
+    try {
+      fileInfo = await stat(absolutePath);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return null;
+      }
+      throw error;
+    }
+
+    return {
       absolutePath,
       relativePath,
       extension,
       mtime: Math.floor(fileInfo.mtimeMs)
-    });
-  }
+    };
+  });
 
-  return files.sort((a, b) => a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0);
+  return files
+    .filter((file): file is SourceFileEntry => file !== null)
+    .sort((a, b) => a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0);
 }
 
 export async function listIndexableFiles(
@@ -165,11 +189,13 @@ function isKbxImport(relativePath: string): boolean {
 
 interface GitignorePolicy {
   ignores: (relativePath: string) => boolean;
+  patterns: string[];
 }
 
 function emptyGitignorePolicy(): GitignorePolicy {
   return {
-    ignores: () => false
+    ignores: () => false,
+    patterns: []
   };
 }
 
@@ -179,12 +205,28 @@ async function loadGitignore(workspaceRoot: string): Promise<GitignorePolicy> {
     const raw = await readFile(path.join(workspaceRoot, ".gitignore"), "utf8");
     matcher.add(raw);
     return {
-      ignores: (relativePath) => matcher.ignores(relativePath)
+      ignores: (relativePath) => matcher.ignores(relativePath),
+      patterns: raw.split(/\r?\n/)
     };
   } catch {
     // A workspace without .gitignore is valid.
     return emptyGitignorePolicy();
   }
+}
+
+function safeGitignoreGlobExcludes(patterns: string[]): string[] {
+  const normalized = patterns.map(normalizePolicyPattern).filter(Boolean);
+  const safe: string[] = [];
+  for (const [index, pattern] of normalized.entries()) {
+    if (pattern.startsWith("!")) {
+      continue;
+    }
+    const hasLaterNegation = normalized.slice(index + 1).some((candidate) => candidate.startsWith("!"));
+    if (!hasLaterNegation) {
+      safe.push(pattern);
+    }
+  }
+  return safe;
 }
 
 function globSearchPatterns(targetRelativePath: string, include: string[]): string[] {
@@ -202,8 +244,8 @@ function scopedGlobIncludePatterns(targetRelativePath: string, pattern: string):
     return targetRelativePath === "." ? ["**/*"] : [`${targetRelativePath}/**/*`];
   }
 
-  const workspacePattern = gitignorePatternToGlob(normalized);
-  const targetPattern = joinGlob(targetRelativePath, gitignorePatternToGlob(normalized));
+  const workspacePattern = gitignorePatternToGlobs(normalized)[0] ?? "";
+  const targetPattern = joinGlob(targetRelativePath, workspacePattern);
   return unique([
     scopeGlobToTarget(workspacePattern, targetRelativePath),
     targetPattern
@@ -254,20 +296,26 @@ function globIgnorePatterns(patterns: string[]): string[] {
     patterns
       .map(normalizePolicyPattern)
       .filter((pattern) => pattern && !pattern.startsWith("!"))
-      .map(gitignorePatternToGlob)
+      .flatMap(gitignorePatternToGlobs)
   );
 }
 
-function gitignorePatternToGlob(pattern: string): string {
+function gitignorePatternToGlobs(pattern: string): string[] {
   const normalized = normalizePolicyPattern(pattern);
   if (!normalized) {
-    return normalized;
+    return [];
   }
   if (normalized.endsWith("/")) {
     const directory = normalized.slice(0, -1);
-    return directory.includes("/") ? `${directory}/**` : `**/${directory}/**`;
+    return directory.includes("/") ? [`${directory}/**`] : [`${directory}/**`, `**/${directory}/**`];
   }
-  return normalized.includes("/") ? normalized : `**/${normalized}`;
+  if (normalized.endsWith("/**")) {
+    const directory = normalized.slice(0, -3);
+    return directory.includes("/") ? [normalized] : [normalized, `**/${normalized}`];
+  }
+  return normalized.includes("/")
+    ? [normalized, `${normalized}/**`]
+    : [`**/${normalized}`, `**/${normalized}/**`];
 }
 
 function normalizePolicyPattern(pattern: string): string {
@@ -297,4 +345,28 @@ function staticGlobPrefix(pattern: string): string {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+async function mapConcurrent<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error
+    && "code" in error
+    && ((error as { code?: unknown }).code === "ENOENT" || (error as { code?: unknown }).code === "ENOTDIR");
 }

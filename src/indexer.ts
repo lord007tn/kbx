@@ -233,6 +233,9 @@ export async function loadIndexStats(workspace: Workspace, model: string, dim: n
     if (error instanceof Error && error.message.includes("does not match")) {
       throw error;
     }
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
     return {
       schema_version: SCHEMA_VERSION,
       model,
