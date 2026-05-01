@@ -22,7 +22,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Persistent SQLite lexical index stored under `.kbx/lexical.db` with FTS5 unicode and trigram indexes.
 - Hybrid baseline search that combines vector results with SQLite lexical/BM25 matches.
 - Deterministic retrieval enhancers: exact phrase/source boosts, proximity scoring, post-fusion reranking, and query-centered snippets.
-- Optional external command reranker contract for model-based or LLM reranking experiments; disabled by default.
+- Optional Transformers.js model reranker and external command reranker contract for heavier model-based or LLM reranking experiments; disabled by default.
 - Built-in local reranker mode for deterministic phrase, source, proximity, and match-type ordering.
 - Retrieval quality eval command with MRR, hit rate, and recall@k over a JSON corpus.
 - Example retrieval eval corpus under `examples/retrieval-eval/`.
@@ -55,6 +55,6 @@ This document records what is already present in the current `kbx` codebase so t
 ## Known Gaps
 
 - First-class hook adapter coverage beyond Claude Code still depends on which clients expose stable post-edit lifecycle hooks.
-- Cross-encoder or LLM reranking can be integrated through the command reranker contract, but kbx does not bundle a heavy model.
+- Cross-encoder or LLM reranking can be integrated through the command reranker contract, but kbx does not bundle a heavy cross-encoder or generator.
 - Node SEA-style single-file binaries are not the supported path while kbx depends on native addons (`better-sqlite3` and `@zvec/zvec`); standalone Node-runtime archives are the supported distribution artifact for users without system Node.
 - Answer generation and chat are permanent non-goals; kbx remains a retrieval layer for tools such as Codex and Claude.

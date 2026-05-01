@@ -43,6 +43,7 @@ kbx ingest docs --include "**/*.md" --exclude "drafts/**" --no-gitignore
 kbx search "workspace registry"
 kbx search "workspace registry" --fresh
 kbx search "workspace registry" --global
+kbx search "workspace registry" --reranker model
 kbx watch
 kbx doctor --repair
 kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
@@ -131,10 +132,11 @@ Search uses deterministic hybrid retrieval by default. Optional model or LLM rer
 
 ```bash
 kbx search "session timeout" --reranker local
+kbx search "session timeout" --reranker model
 kbx search "session timeout" --reranker command --reranker-command "node rerank.mjs"
 ```
 
-`local` uses kbx's built-in deterministic source, phrase, proximity, and match-type reranking. The `command` mode reads one JSON object from stdin (`query` plus `candidates`) and writes either `{ "scores": { "<chunk-id>": 0.9 } }` or an array of `{ "id", "score" }`.
+`local` uses kbx's built-in deterministic source, phrase, proximity, and match-type reranking. `model` loads an opt-in Transformers.js feature-extraction reranker (`Xenova/all-MiniLM-L6-v2` by default, override with `--reranker-model` or `KBX_RERANK_MODEL`). The `command` mode reads one JSON object from stdin (`query` plus `candidates`) and writes either `{ "scores": { "<chunk-id>": 0.9 } }` or an array of `{ "id", "score" }`.
 
 Retrieval quality can be measured before and after reranker changes with a JSON eval corpus:
 

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { applyOptionalReranker, parseCommandLine, runCommandReranker } from "../src/reranker";
+import { applyOptionalReranker, parseCommandLine, runCommandReranker, runModelReranker } from "../src/reranker";
 import type { SearchHit } from "../src/types";
 
 test("parseCommandLine preserves quoted arguments", () => {
@@ -62,6 +62,28 @@ test("applyOptionalReranker accepts explicit local mode", async () => {
   const hits = [hit("a"), hit("b")];
 
   assert.deepEqual(await applyOptionalReranker("query", hits, { mode: "local" }), hits);
+});
+
+test("runModelReranker supports deterministic hash model for tests", async () => {
+  const scores = await runModelReranker("target token", [
+    { id: "a", source: "a.md", chunk_idx: 0, score: 0.1, text: "unrelated" },
+    { id: "b", source: "b.md", chunk_idx: 0, score: 0.1, text: "target token appears here" }
+  ], "hash");
+
+  assert.equal(scores.get("a"), 0);
+  assert.equal(scores.get("b"), 2);
+});
+
+test("applyOptionalReranker reorders with model mode", async () => {
+  const ranked = await applyOptionalReranker("target", [
+    { ...hit("a"), text: "unrelated" },
+    { ...hit("b"), text: "target" }
+  ], {
+    mode: "model",
+    model: "hash"
+  });
+
+  assert.equal(ranked[0]?.id, "b");
 });
 
 function hit(id: string): SearchHit {

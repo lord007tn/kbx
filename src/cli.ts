@@ -151,7 +151,8 @@ program
   .option("-k, --top-k <number>", "number of chunks to return", parsePositiveInteger, 5)
   .option("--fresh", "refresh changed, deleted, or new source files before searching")
   .option("--global", "search across all registered workspaces")
-  .option("--reranker <mode>", "optional reranker mode: none, local, or command", "none")
+  .option("--reranker <mode>", "optional reranker mode: none, local, model, or command", "none")
+  .option("--reranker-model <model>", "Transformers.js feature-extraction model for --reranker model")
   .option("--reranker-command <command>", "external reranker command that reads JSON from stdin and writes scores JSON")
   .addHelpText("after", `
 
@@ -160,16 +161,18 @@ Examples:
   $ kbx search "workspace registry" -k 10
   $ kbx search "new ADR" --fresh
   $ kbx search "session timeout" --global
+  $ kbx search "auth timeout" --reranker model
   $ kbx search "auth timeout" --reranker command --reranker-command "node rerank.mjs"
 
 Search reads the existing index by default. Use --fresh to refresh sources before querying.
 Model or LLM reranking is optional and off by default.
 `)
-  .action(async (query: string, options: { topK: number; fresh?: boolean; global?: boolean; reranker: "none" | "local" | "command"; rerankerCommand?: string }) => {
+  .action(async (query: string, options: { topK: number; fresh?: boolean; global?: boolean; reranker: "none" | "local" | "model" | "command"; rerankerModel?: string; rerankerCommand?: string }) => {
     if (options.global === true) {
       const hits = await searchRegisteredWorkspaces(query, options.topK, {
         reranker: {
           mode: options.reranker,
+          model: options.rerankerModel,
           command: options.rerankerCommand
         }
       });
@@ -201,6 +204,7 @@ Model or LLM reranking is optional and off by default.
     const hits = await searchWorkspace(workspace, query, options.topK, {
       reranker: {
         mode: options.reranker,
+        model: options.rerankerModel,
         command: options.rerankerCommand
       }
     });
@@ -910,9 +914,10 @@ evalCommand
   .description("Evaluate search results against expected source files.")
   .argument("<corpus>", "JSON array of { id, query, relevant: [source] } cases")
   .option("-k, --top-k <number>", "number of hits to evaluate per query", parsePositiveInteger, 5)
-  .option("--reranker <mode>", "optional reranker mode: none, local, or command", "none")
+  .option("--reranker <mode>", "optional reranker mode: none, local, model, or command", "none")
+  .option("--reranker-model <model>", "Transformers.js feature-extraction model for --reranker model")
   .option("--reranker-command <command>", "external reranker command")
-  .action(async (corpusPath: string, options: { topK: number; reranker: "none" | "local" | "command"; rerankerCommand?: string }) => {
+  .action(async (corpusPath: string, options: { topK: number; reranker: "none" | "local" | "model" | "command"; rerankerModel?: string; rerankerCommand?: string }) => {
     const workspace = await requireWorkspace();
     const cases = parseRetrievalEvalCorpus(await readFile(path.resolve(corpusPath), "utf8"));
     const resultsByCaseId = new Map<string, Awaited<ReturnType<typeof searchWorkspace>>>();
@@ -920,6 +925,7 @@ evalCommand
       resultsByCaseId.set(testCase.id, await searchWorkspace(workspace, testCase.query, options.topK, {
         reranker: {
           mode: options.reranker,
+          model: options.rerankerModel,
           command: options.rerankerCommand
         }
       }));
