@@ -45,5 +45,17 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package dry run
-        run: npm pack --dry-run
+      - name: Verify npm package contents
+        run: npm run smoke:pack
+
+      - name: Package local platform archive
+        run: npm run package:binaries
+
+      - name: Smoke test local platform archive
+        run: npm run smoke:artifact
+
+      - name: Generate artifact checksums
+        run: npm run release:checksums
+
+      - name: Verify release artifact checksums
+        run: npm run release:verify

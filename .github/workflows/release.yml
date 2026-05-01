@@ -58,8 +58,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package dry run
-        run: npm pack --dry-run
+      - name: Verify npm package contents
+        run: npm run smoke:pack
 
       - name: Install smoke test
         run: npm run smoke:install

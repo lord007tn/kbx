@@ -19,6 +19,7 @@ npm run typecheck
 npm test
 npm run build
 npm run release:preflight
+npm run smoke:pack
 npm run smoke:install
 npm run package:binaries
 npm run smoke:artifact
@@ -145,7 +146,7 @@ A tiny example corpus lives under `examples/retrieval-eval/`.
 
 ## Release Artifacts
 
-`npm run package:binaries` creates a platform archive under `dist/artifacts/` with its own Node runtime, dependency tree, and `bin/kbx` launcher. `npm run smoke:artifact` extracts that archive and runs `kbx --version` from outside the repo. The release workflow builds Linux, macOS, and Windows archives, verifies checksums and required runtime payloads, emits GitHub artifact attestations, and uploads a generated Homebrew formula.
+`npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run package:binaries` creates a platform archive under `dist/artifacts/` with its own Node runtime, dependency tree, and `bin/kbx` launcher. `npm run smoke:artifact` extracts that archive and runs `kbx --version` from outside the repo. The release workflow builds Linux, macOS, and Windows archives, verifies checksums and required runtime payloads, emits GitHub artifact attestations, and uploads a generated Homebrew formula.
 
 Release packaging has optional signing and notarization hooks:
 
