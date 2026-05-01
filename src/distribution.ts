@@ -72,6 +72,61 @@ export function runtimeArchiveFormat(name: string): RuntimeArchiveFormat | undef
   return undefined;
 }
 
+export function parseReleaseCommandLine(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!;
+    const next = value[index + 1];
+    if (char === "\\" && next && (next === "\\" || next === "\"" || next === "'" || /\s/.test(next))) {
+      current += next;
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (quote) {
+    throw new Error("Unterminated quote in release command.");
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+export function expandReleaseCommand(
+  value: string,
+  replacements: Record<string, string>
+): string[] {
+  return parseReleaseCommandLine(value).map((part) => {
+    let expanded = part;
+    for (const [key, replacement] of Object.entries(replacements)) {
+      expanded = expanded.replaceAll(`{${key}}`, replacement);
+    }
+    return expanded;
+  });
+}
+
 export function requiredRuntimeArchiveEntries(name: string): string[] {
   const root = archiveRootName(name);
   const launcher = name.endsWith(".zip") ? `${root}/bin/kbx.cmd` : `${root}/bin/kbx`;

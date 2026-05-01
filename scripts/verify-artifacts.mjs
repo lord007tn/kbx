@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import JSZip from "jszip";
-import { missingRuntimeArchiveEntries, runtimeArchiveFormat } from "../src/distribution.ts";
+import { missingRuntimeArchiveEntries, runtimeArchiveFormat } from "./release-utils.mjs";
 
 const exec = promisify(execFile);
 const checksumsPath = process.argv[2] ?? "dist/artifacts/checksums.txt";

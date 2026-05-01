@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import JSZip from "jszip";
+import { expandReleaseCommand } from "./release-utils.mjs";
 
 const require = createRequire(import.meta.url);
 const exec = promisify(execFile);
@@ -18,6 +19,12 @@ const name = platform === "win32"
   : `kbx-v${packageJson.version}-${platform}-${arch}.tar.gz`;
 const packageRoot = path.join(".release", `kbx-v${packageJson.version}-${platform}-${arch}`);
 const artifactPath = path.join(artifactDir, name);
+const releaseReplacements = {
+  arch,
+  artifact: path.resolve(artifactPath),
+  package_root: path.resolve(packageRoot),
+  platform
+};
 
 if (platform !== os.platform() || arch !== os.arch()) {
   if (process.env.KBX_ALLOW_CROSS_PACKAGE !== "1") {
@@ -49,8 +56,10 @@ await cp("README.md", path.join(packageRoot, "README.md")).catch(() => undefined
 await cp("LICENSE", path.join(packageRoot, "LICENSE")).catch(() => undefined);
 
 if (platform === "win32") {
-  await cp(process.execPath, path.join(packageRoot, "support", "node", "node.exe"));
+  const nodePath = path.join(packageRoot, "support", "node", "node.exe");
+  await cp(process.execPath, nodePath);
   await writeFile(path.join(packageRoot, "bin", "kbx.cmd"), "@echo off\r\n\"%~dp0\\..\\support\\node\\node.exe\" \"%~dp0\\..\\dist\\cli.mjs\" %*\r\n", "utf8");
+  await maybeSignPackageFile(nodePath);
   await writeZip(packageRoot, artifactPath);
 } else {
   const nodePath = path.join(packageRoot, "support", "node", "node");
@@ -61,9 +70,11 @@ if (platform === "win32") {
   const launcherPath = path.join(packageRoot, "bin", "kbx");
   await writeFile(launcherPath, launcher, "utf8");
   await chmod(launcherPath, 0o755);
+  await maybeSignPackageFile(nodePath);
   await exec("tar", ["-czf", path.resolve(artifactPath), "-C", path.dirname(packageRoot), path.basename(packageRoot)], { windowsHide: true });
 }
 await maybeSignArtifact(artifactPath);
+await maybeNotarizeArtifact(artifactPath);
 console.log(artifactPath);
 
 async function writeZip(root, output) {
@@ -105,50 +116,52 @@ async function maybeSignArtifact(artifactPath) {
     return;
   }
 
-  const [program, ...args] = parseCommandLine(command).map((part) => part.replaceAll("{artifact}", artifactPath));
+  const [program, ...args] = expandReleaseCommand(command, {
+    ...releaseReplacements,
+    artifact: path.resolve(artifactPath)
+  });
   if (!program) {
     throw new Error("KBX_SIGN_COMMAND is empty.");
   }
   await exec(program, args, { windowsHide: true });
 }
 
-function parseCommandLine(value) {
-  const parts = [];
-  let current = "";
-  let quote = null;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    const next = value[index + 1];
-    if (char === "\\" && next && (next === "\\" || next === "\"" || next === "'" || /\s/.test(next))) {
-      current += next;
-      index += 1;
-      continue;
+async function maybeSignPackageFile(filePath) {
+  const command = process.env.KBX_SIGN_FILE_COMMAND;
+  if (!command) {
+    if (process.env.KBX_SIGN_FILE_REQUIRED === "1") {
+      throw new Error("KBX_SIGN_FILE_REQUIRED=1 but KBX_SIGN_FILE_COMMAND is not set.");
     }
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-    if (char === "\"" || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
+    return;
   }
-  if (current) {
-    parts.push(current);
+
+  const [program, ...args] = expandReleaseCommand(command, {
+    ...releaseReplacements,
+    file: path.resolve(filePath)
+  });
+  if (!program) {
+    throw new Error("KBX_SIGN_FILE_COMMAND is empty.");
   }
-  return parts;
+  await exec(program, args, { windowsHide: true });
+}
+
+async function maybeNotarizeArtifact(artifactPath) {
+  const command = process.env.KBX_NOTARIZE_COMMAND;
+  if (!command) {
+    if (process.env.KBX_NOTARIZE_REQUIRED === "1") {
+      throw new Error("KBX_NOTARIZE_REQUIRED=1 but KBX_NOTARIZE_COMMAND is not set.");
+    }
+    return;
+  }
+
+  const [program, ...args] = expandReleaseCommand(command, {
+    ...releaseReplacements,
+    artifact: path.resolve(artifactPath)
+  });
+  if (!program) {
+    throw new Error("KBX_NOTARIZE_COMMAND is empty.");
+  }
+  await exec(program, args, { windowsHide: true });
 }
 
 async function exists(filePath) {

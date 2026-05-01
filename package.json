@@ -24,8 +24,8 @@
     "kbx": "./dist/cli.mjs"
   },
   "files": [
-    "dist",
-    "scripts"
+    "dist/cli.mjs",
+    "dist/cli.d.mts"
   ],
   "engines": {
     "node": ">=20.19.0"
@@ -34,7 +34,7 @@
     "build": "tsdown",
     "package:binaries": "node scripts/package-binaries.mjs",
     "release:checksums": "node scripts/generate-checksums.mjs",
-    "release:verify": "node --import tsx scripts/verify-artifacts.mjs",
+    "release:verify": "node scripts/verify-artifacts.mjs",
     "release:homebrew": "node scripts/homebrew-formula.mjs",
     "release:preflight": "npm run typecheck && npm test && npm run build && npm run smoke:install",
     "smoke:artifact": "node scripts/smoke-artifact.mjs",

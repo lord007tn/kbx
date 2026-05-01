@@ -145,9 +145,15 @@ A tiny example corpus lives under `examples/retrieval-eval/`.
 
 ## Release Artifacts
 
-`npm run package:binaries` creates a platform archive under `dist/artifacts/` with its own Node runtime, dependency tree, and `bin/kbx` launcher. `npm run smoke:artifact` extracts that archive and runs `kbx --version` from outside the repo. The release workflow builds Linux, macOS, and Windows archives, verifies checksums, emits GitHub artifact attestations, and uploads a generated Homebrew formula.
+`npm run package:binaries` creates a platform archive under `dist/artifacts/` with its own Node runtime, dependency tree, and `bin/kbx` launcher. `npm run smoke:artifact` extracts that archive and runs `kbx --version` from outside the repo. The release workflow builds Linux, macOS, and Windows archives, verifies checksums and required runtime payloads, emits GitHub artifact attestations, and uploads a generated Homebrew formula.
 
-Set `KBX_SIGN_COMMAND` to sign an artifact before checksums are generated. The command receives `{artifact}` as a placeholder for the archive path; set `KBX_SIGN_REQUIRED=1` in CI if unsigned artifacts should fail the release.
+Release packaging has optional signing and notarization hooks:
+
+- `KBX_SIGN_FILE_COMMAND` runs before the archive is written. Use it for platform runtime files such as the bundled Node executable.
+- `KBX_SIGN_COMMAND` runs after the archive is written and before checksums are generated.
+- `KBX_NOTARIZE_COMMAND` runs after archive signing and before checksums are generated.
+
+Hook commands support `{file}`, `{artifact}`, `{package_root}`, `{platform}`, and `{arch}` placeholders where applicable. Set `KBX_SIGN_FILE_REQUIRED=1`, `KBX_SIGN_REQUIRED=1`, or `KBX_NOTARIZE_REQUIRED=1` in CI when a missing command should fail the release.
 
 Destructive MCP tools are disabled by default. Enable them only when you want agents to perform delete/reset operations:
 

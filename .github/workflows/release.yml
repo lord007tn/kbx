@@ -106,6 +106,12 @@ jobs:
         env:
           KBX_PACKAGE_PLATFORM: ${{ matrix.platform }}
           KBX_PACKAGE_ARCH: ${{ matrix.arch }}
+          KBX_SIGN_FILE_COMMAND: ${{ secrets.KBX_SIGN_FILE_COMMAND }}
+          KBX_SIGN_FILE_REQUIRED: ${{ secrets.KBX_SIGN_FILE_REQUIRED }}
+          KBX_SIGN_COMMAND: ${{ secrets.KBX_SIGN_COMMAND }}
+          KBX_SIGN_REQUIRED: ${{ secrets.KBX_SIGN_REQUIRED }}
+          KBX_NOTARIZE_COMMAND: ${{ secrets.KBX_NOTARIZE_COMMAND }}
+          KBX_NOTARIZE_REQUIRED: ${{ secrets.KBX_NOTARIZE_REQUIRED }}
 
       - name: Smoke test platform archive
         run: npm run smoke:artifact

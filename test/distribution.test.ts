@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   archiveRootName,
   checksumsText,
+  expandReleaseCommand,
   generateHomebrewFormula,
   missingRuntimeArchiveEntries,
+  parseReleaseCommandLine,
   parseChecksumsText,
   releaseArtifactName,
   requiredRuntimeArchiveEntries,
@@ -41,6 +43,33 @@ test("runtimeArchiveFormat recognizes supported release archive types", () => {
   assert.equal(runtimeArchiveFormat("kbx-v0.2.0-darwin-arm64.tar.gz"), "tar");
   assert.equal(runtimeArchiveFormat("kbx-v0.2.0-linux-x64.tgz"), "tar");
   assert.equal(runtimeArchiveFormat("kbx-v0.2.0-win32-x64.exe"), undefined);
+});
+
+test("parseReleaseCommandLine preserves quoted arguments", () => {
+  assert.deepEqual(parseReleaseCommandLine('codesign --sign "Developer ID Application: Example" "{file}"'), [
+    "codesign",
+    "--sign",
+    "Developer ID Application: Example",
+    "{file}"
+  ]);
+});
+
+test("expandReleaseCommand replaces signing placeholders after parsing", () => {
+  assert.deepEqual(expandReleaseCommand('xcrun notarytool submit "{artifact}" --keychain-profile "{profile}"', {
+    artifact: "dist/artifacts/kbx-v0.2.0-darwin-arm64.tar.gz",
+    profile: "kbx-release"
+  }), [
+    "xcrun",
+    "notarytool",
+    "submit",
+    "dist/artifacts/kbx-v0.2.0-darwin-arm64.tar.gz",
+    "--keychain-profile",
+    "kbx-release"
+  ]);
+});
+
+test("parseReleaseCommandLine rejects unterminated quotes", () => {
+  assert.throws(() => parseReleaseCommandLine('codesign --sign "missing'), /Unterminated quote/);
 });
 
 test("missingRuntimeArchiveEntries rejects archives without bundled runtime payload", () => {
