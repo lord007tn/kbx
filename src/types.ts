@@ -16,14 +16,21 @@ export interface WorkspaceConfig {
   chunk: {
     size: number;
     overlap: number;
-    strategy: "heading" | "fixed";
+    strategy: "heading" | "fixed" | "sentence";
   };
   mcp: {
     citations: "safe" | "full-path";
+    destructive_tools: "disabled" | "enabled";
   };
 }
 
-export type SourceEntry = WorkspaceSourceEntry | ExternalImportSourceEntry;
+export interface UserConfig {
+  init: {
+    root_preference: "current" | "git-root";
+  };
+}
+
+export type SourceEntry = WorkspaceSourceEntry | ExternalImportSourceEntry | SessionMemorySourceEntry;
 
 export interface WorkspaceSourceEntry {
   path: string;
@@ -43,6 +50,16 @@ export interface ExternalImportSourceEntry {
   imported_at: string;
 }
 
+export interface SessionMemorySourceEntry {
+  path: string;
+  kind: "session_memory";
+  include: string[];
+  exclude: string[];
+  no_gitignore?: boolean;
+  retention_days: number;
+  created_at: string;
+}
+
 export interface RegistryEntry {
   workspace_id: string;
   name: string;
@@ -57,7 +74,7 @@ export interface ChunkRecord {
   source: string;
   human_source: string;
   citation_source: string;
-  source_origin: "workspace" | "external_import";
+  source_origin: "workspace" | "external_import" | "session_memory";
   chunk_idx: number;
   mtime: number;
   tags: string;
@@ -87,6 +104,7 @@ export interface SearchHit {
   chunk_idx: number;
   score: number;
   text: string;
+  snippet?: string;
   match: "vector" | "lexical" | "hybrid";
 }
 

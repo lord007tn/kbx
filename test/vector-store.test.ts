@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { chunkId } from "../src/chunk";
 import { ChunkVectorStore } from "../src/vector-store";
 import { workspaceFromRoot } from "../src/workspace";
 
@@ -48,6 +49,39 @@ test("ChunkVectorStore upserts, searches, and deletes chunks", async () => {
       store.deleteSource("alpha.md");
       const afterDelete = store.search([1, 0, 0], 2);
       assert.equal(afterDelete.some((hit) => hit.id === "alpha-0"), false);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ChunkVectorStore lists source chunks above scalar query limits", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-vector-store-list-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const store = await ChunkVectorStore.open(workspace, 3);
+    try {
+      store.upsertChunks(Array.from({ length: 1_025 }, (_, index) => ({
+        id: chunkId("large.md", index),
+        text: `large chunk ${index}`,
+        source: "large.md",
+        human_source: "large.md",
+        citation_source: "large.md",
+        source_origin: "workspace",
+        chunk_idx: index,
+        mtime: 1,
+        tags: "",
+        embedding: [1, 0, 0]
+      })));
+
+      const chunks = store.listSourceChunks("large.md", 1_025);
+
+      assert.equal(chunks.length, 1_025);
+      assert.equal(chunks[0]?.chunk_idx, 0);
+      assert.equal(chunks.at(-1)?.chunk_idx, 1_024);
     } finally {
       store.close();
     }

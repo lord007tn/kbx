@@ -8,6 +8,7 @@ import {
   type RegistryEntry,
   SCHEMA_VERSION,
   type SourceEntry,
+  type UserConfig,
   type WorkspaceConfig,
   type WorkspaceManifest
 } from "./types";
@@ -20,6 +21,7 @@ export interface Workspace {
   configPath: string;
   sourcesPath: string;
   statsPath: string;
+  lexicalPath: string;
   collectionDir: string;
 }
 
@@ -30,7 +32,14 @@ export const defaultConfig: WorkspaceConfig = {
     strategy: "heading"
   },
   mcp: {
-    citations: "safe"
+    citations: "safe",
+    destructive_tools: "disabled"
+  }
+};
+
+export const defaultUserConfig: UserConfig = {
+  init: {
+    root_preference: "current"
   }
 };
 
@@ -44,6 +53,7 @@ export function workspaceFromRoot(root: string): Workspace {
     configPath: path.join(kbxDir, "config.json"),
     sourcesPath: path.join(kbxDir, "sources.json"),
     statsPath: path.join(kbxDir, "stats.json"),
+    lexicalPath: path.join(kbxDir, "lexical.db"),
     collectionDir: path.join(kbxDir, "collection")
   };
 }
@@ -118,7 +128,19 @@ export async function saveManifest(workspace: Workspace, manifest: WorkspaceMani
 }
 
 export async function loadConfig(workspace: Workspace): Promise<WorkspaceConfig> {
-  return readJson<WorkspaceConfig>(workspace.configPath);
+  const stored = await readJson<Partial<WorkspaceConfig>>(workspace.configPath);
+  return {
+    ...defaultConfig,
+    ...stored,
+    chunk: {
+      ...defaultConfig.chunk,
+      ...stored.chunk
+    },
+    mcp: {
+      ...defaultConfig.mcp,
+      ...stored.mcp
+    }
+  };
 }
 
 export async function loadSources(workspace: Workspace): Promise<SourceEntry[]> {
@@ -136,6 +158,34 @@ export async function saveConfig(workspace: Workspace, config: WorkspaceConfig):
   await writeJson(workspace.configPath, config);
 }
 
+export function userKbxDir(): string {
+  return process.env.KBX_HOME ? path.resolve(process.env.KBX_HOME) : path.join(os.homedir(), ".kbx");
+}
+
+export function userConfigPath(): string {
+  return path.join(userKbxDir(), "config.json");
+}
+
+export async function loadUserConfig(): Promise<UserConfig> {
+  const configFile = userConfigPath();
+  if (!(await exists(configFile))) {
+    return structuredClone(defaultUserConfig);
+  }
+  const stored = await readJson<Partial<UserConfig>>(configFile);
+  return {
+    ...defaultUserConfig,
+    ...stored,
+    init: {
+      ...defaultUserConfig.init,
+      ...stored.init
+    }
+  };
+}
+
+export async function saveUserConfig(config: UserConfig): Promise<void> {
+  await writeJson(userConfigPath(), config);
+}
+
 export async function touchManifest(workspace: Workspace): Promise<void> {
   const manifest = await loadManifest(workspace);
   manifest.updated_at = new Date().toISOString();
@@ -143,7 +193,7 @@ export async function touchManifest(workspace: Workspace): Promise<void> {
 }
 
 export function registryPath(): string {
-  return path.join(os.homedir(), ".kbx", "registry.json");
+  return path.join(userKbxDir(), "registry.json");
 }
 
 export async function loadRegistry(): Promise<RegistryEntry[]> {

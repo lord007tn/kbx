@@ -1,16 +1,22 @@
 #!/usr/bin/env node
-import { confirm, isCancel, progress, spinner, type ProgressResult, type SpinnerResult } from "@clack/prompts";
+import { confirm, isCancel, progress, select, spinner, type ProgressResult, type SpinnerResult } from "@clack/prompts";
 import { Command } from "commander";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { getConfigValue, listConfigValues, setConfigValue } from "./config";
+import { KBX_AGENT_GUIDE } from "./agent-guide";
+import { getConfigValue, getUserConfigValue, listConfigValues, listUserConfigValues, setConfigValue, setUserConfigValue } from "./config";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
-import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, removeSource, resetWorkspaceIndex, resolveSourceEntry, type IngestProgressEvent, type IngestResult } from "./indexer";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, removeSource, resetWorkspaceIndex, resolveSourceEntry, type IngestProgressEvent, type IngestResult } from "./indexer";
 import { runMcpServer } from "./mcp";
-import { MODEL_CATALOG, resolveModel } from "./models";
+import { cachedModelBenchmark, formatBenchmarkSpeed, isCatalogModelInstalled, loadCatalogModelFromPath, MODEL_CATALOG, modelDetails, resolveModel, type ModelCatalogEntry } from "./models";
 import { searchWorkspace } from "./search";
+import { evaluateRetrieval, parseRetrievalEvalCorpus } from "./retrieval-eval";
+import { addSessionMemory, listSessionMemories, pruneExpiredSessionMemories, sessionMemorySource } from "./session-memory";
 import { KBX_VERSION } from "./version";
 import { watchIngest } from "./watch";
+import { generateAdapterConfig, generateAdapterHooks, listAdapters } from "./adapters";
+import { handleClaudeCodePostToolUse, handleFileRefreshHook } from "./hooks";
 import {
   deleteWorkspaceKnowledgeBase,
   findGitRoot,
@@ -18,11 +24,13 @@ import {
   forgetWorkspace,
   initWorkspace,
   loadConfig,
+  loadUserConfig,
   loadManifest,
   loadRegistry,
   loadSources,
   registryPath,
   saveConfig,
+  saveUserConfig,
   saveManifest,
   workspaceFromRoot
 } from "./workspace";
@@ -42,6 +50,7 @@ Common workflows:
   $ kbx init --model nomic
   $ kbx ingest
   $ kbx search "workspace registry" -k 5
+  $ kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
   $ kbx mcp
 
 Privacy model:
@@ -57,6 +66,7 @@ program
   .option("--here", "initialize the current directory")
   .option("--git-root", "initialize the nearest git root")
   .option("--model <model-id>", "embedding model to use for this workspace")
+  .option("--choose-model", "choose an embedding model interactively")
   .addHelpText("after", `
 
 Examples:
@@ -70,9 +80,9 @@ Model IDs:
   bge-base    English quality candidate
   qwen3-0.6b  larger quality candidate
 `)
-  .action(async (targetPath: string, options: { here?: boolean; gitRoot?: boolean; model?: string }) => {
+  .action(async (targetPath: string, options: { here?: boolean; gitRoot?: boolean; model?: string; chooseModel?: boolean }) => {
     const root = await resolveInitRoot(targetPath, options);
-    const model = options.model ? resolveModel(options.model) : undefined;
+    const model = await resolveRequestedModel(options.model, { interactive: options.chooseModel === true });
     const workspace = await initWorkspace(root, model ? { model: model.model, dim: model.dim } : {});
     const manifest = await loadManifest(workspace);
     console.log(`Initialized ${manifest.name} (${manifest.workspace_id.slice(0, 8)})`);
@@ -139,21 +149,39 @@ program
   .summary("Run semantic retrieval against the nearest initialized workspace.")
   .argument("<query>", "search query")
   .option("-k, --top-k <number>", "number of chunks to return", parsePositiveInteger, 5)
+  .option("--fresh", "refresh changed, deleted, or new source files before searching")
+  .option("--reranker <mode>", "optional reranker mode: none or command", "none")
+  .option("--reranker-command <command>", "external reranker command that reads JSON from stdin and writes scores JSON")
   .addHelpText("after", `
 
 Examples:
   $ kbx search "deployment notes"
   $ kbx search "workspace registry" -k 10
+  $ kbx search "new ADR" --fresh
+  $ kbx search "auth timeout" --reranker command --reranker-command "node rerank.mjs"
 
-Search reads the existing index only. Use kbx stats --fresh to check staleness.
+Search reads the existing index by default. Use --fresh to refresh sources before querying.
+Model or LLM reranking is optional and off by default.
 `)
-  .action(async (query: string, options: { topK: number }) => {
+  .action(async (query: string, options: { topK: number; fresh?: boolean; reranker: "none" | "command"; rerankerCommand?: string }) => {
     const workspace = await findWorkspace(process.cwd());
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
     }
 
-    const hits = await searchWorkspace(workspace, query, options.topK);
+    if (options.fresh === true) {
+      const freshness = await refreshWorkspaceFreshness(workspace);
+      if (freshness.refreshed && freshness.refresh) {
+        console.error(`Refreshed ${freshness.refresh.files} file(s), ${freshness.refresh.chunks} new chunk(s), ${freshness.refresh.skipped} unchanged, ${freshness.refresh.deleted} deleted.`);
+      }
+    }
+
+    const hits = await searchWorkspace(workspace, query, options.topK, {
+      reranker: {
+        mode: options.reranker,
+        command: options.rerankerCommand
+      }
+    });
     if (hits.length === 0) {
       console.log("No results.");
       return;
@@ -161,12 +189,30 @@ Search reads the existing index only. Use kbx stats --fresh to check staleness.
 
     for (const [index, hit] of hits.entries()) {
       console.log(`${index + 1}. ${hit.source}#${hit.chunk_idx} (${hit.score.toFixed(3)})`);
-      console.log(indent(excerpt(hit.text)));
+      console.log(indent(excerpt(hit.snippet ?? hit.text)));
       console.log("");
     }
   });
 
 program
+  .command("watch")
+  .description("Keep the current workspace index fresh while files change.")
+  .summary("Watch manifest sources and refresh changed or deleted files during agent sessions.")
+  .argument("[path]", "workspace file or directory to watch")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx watch
+  $ kbx watch docs
+
+This is equivalent to a long-running hot ingest loop. Press Ctrl+C to stop.
+`)
+  .action(async (targetPath: string | undefined) => {
+    const workspace = await requireWorkspace();
+    await watchIngest(workspace, targetPath ? path.resolve(targetPath) : undefined);
+  });
+
+const mcpCommand = program
   .command("mcp")
   .description("Run the MCP server over stdio.")
   .summary("Expose read-only kbx search tools to MCP clients.")
@@ -187,6 +233,133 @@ Tools:
     await runMcpServer(workspace);
   });
 
+mcpCommand
+  .command("config")
+  .description("Print an MCP config snippet for an AI client.")
+  .summary("Generate client-specific config for Claude, Cursor, Codex, Gemini, and other MCP clients.")
+  .argument("[client]", "MCP client adapter ID or alias")
+  .option("--list", "list supported client adapters")
+  .option("--server-name <name>", "server name to use in the client config")
+  .option("--command <command>", "command that starts kbx")
+  .option("--arg <arg>", "argument to pass to the command; repeatable", collectOption, [])
+  .addHelpText("after", `
+
+Examples:
+  $ kbx mcp config claude
+  $ kbx mcp config cursor
+  $ kbx mcp config codex
+  $ kbx mcp config zed
+  $ kbx mcp config --list
+
+Default command:
+  "kbx" with args ["mcp"]
+`)
+  .action((client: string | undefined, options: {
+    list?: boolean;
+    serverName?: string;
+    command?: string;
+    arg: string[];
+  }) => {
+    if (options.list === true) {
+      for (const adapter of listAdapters()) {
+        console.log(`${adapter.id.padEnd(18)} ${adapter.clientName.padEnd(22)} ${adapter.configPath}`);
+      }
+      return;
+    }
+
+    if (!client) {
+      throw new Error("Missing client. Run kbx mcp config --list to see supported clients.");
+    }
+
+    const snippet = generateAdapterConfig(client, {
+      serverName: options.serverName,
+      command: options.command,
+      args: options.arg.length > 0 ? options.arg : undefined
+    });
+
+    console.log(`# ${snippet.clientName}`);
+    console.log(`# ${snippet.configPath}`);
+    for (const note of snippet.notes) {
+      console.log(`# ${note}`);
+    }
+    console.log(snippet.content);
+  });
+
+const hookCommand = program
+  .command("hook")
+  .description("Run kbx hook handlers for supported agent clients.")
+  .summary("Internal command used by generated agent hook adapters.");
+
+hookCommand
+  .command("claude-code")
+  .description("Run Claude Code hook handlers.")
+  .argument("<event>", "hook event handler")
+  .action(async (event: string) => {
+    if (event !== "post-tool-use") {
+      throw new Error("Unknown Claude Code hook event. Supported: post-tool-use.");
+    }
+    const input = await readStdin();
+    const result = await handleClaudeCodePostToolUse(input);
+    console.log(JSON.stringify(result));
+  });
+
+hookCommand
+  .command("files")
+  .description("Run a generic file refresh hook handler.")
+  .argument("<event>", "hook event handler")
+  .addHelpText("after", `
+
+Examples:
+  $ printf '{"paths":["src/app.ts"]}' | kbx hook files refresh
+
+Input can be JSON with path/file_path/paths/file_paths/files, a JSON string array,
+or newline-delimited file paths.
+`)
+  .action(async (event: string) => {
+    if (event !== "refresh") {
+      throw new Error("Unknown files hook event. Supported: refresh.");
+    }
+    const input = await readStdin();
+    const result = await handleFileRefreshHook(input);
+    console.log(JSON.stringify(result));
+  });
+
+const agentCommand = program
+  .command("agent")
+  .description("Agent helper commands.")
+  .summary("Print guidance and helper information for AI assistant integrations.");
+
+agentCommand
+  .command("guide")
+  .description("Print agent usage guidance for kbx tools.")
+  .summary("Show when agents should search, refresh, fetch chunks, and avoid destructive operations.")
+  .action(() => {
+    console.log(KBX_AGENT_GUIDE);
+  });
+
+agentCommand
+  .command("hooks")
+  .description("Print hook configuration for supported AI clients.")
+  .summary("Generate client hook snippets that keep kbx fresh after agent edits.")
+  .argument("[client]", "hook-capable client adapter ID or alias", "claude-code")
+  .option("--command <command>", "command that starts kbx", "kbx")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx agent hooks claude-code
+
+The generated hook config is additive. Merge it with existing client settings.
+`)
+  .action((client: string, options: { command: string }) => {
+    const snippet = generateAdapterHooks(client, { command: options.command });
+    console.log(`# ${snippet.clientName}`);
+    console.log(`# ${snippet.configPath}`);
+    for (const note of snippet.notes) {
+      console.log(`# ${note}`);
+    }
+    console.log(snippet.content);
+  });
+
 program
   .command("config")
   .description("View or edit workspace config.")
@@ -194,6 +367,7 @@ program
   .argument("<action>", "get or set")
   .argument("[key]", "config key")
   .argument("[value]", "config value")
+  .option("--global", "read or change user-level kbx settings")
   .addHelpText("after", `
 
 Examples:
@@ -201,11 +375,41 @@ Examples:
   $ kbx config get chunk.size
   $ kbx config set chunk.size 1200
   $ kbx config set mcp.citations full-path
+  $ kbx config set mcp.destructive_tools enabled
+  $ kbx config set init.root_preference git-root --global
 
 Keys:
-  chunk.size, chunk.overlap, chunk.strategy, mcp.citations
+  chunk.size, chunk.overlap, chunk.strategy (heading|fixed|sentence), mcp.citations, mcp.destructive_tools
+  init.root_preference (--global)
 `)
-  .action(async (action: string, key?: string, value?: string) => {
+  .action(async (action: string, key?: string, value?: string, options?: { global?: boolean }) => {
+    if (options?.global === true || key?.startsWith("init.")) {
+      const config = await loadUserConfig();
+
+      if (action === "get") {
+        if (key) {
+          console.log(String(getUserConfigValue(config, key)));
+          return;
+        }
+
+        for (const entry of listUserConfigValues(config)) {
+          console.log(`${entry.key}=${entry.value}`);
+        }
+        return;
+      }
+
+      if (action === "set") {
+        if (!key || value === undefined) {
+          throw new Error("Usage: kbx config set <key> <value> --global");
+        }
+        await saveUserConfig(setUserConfigValue(config, key, value));
+        console.log(`${key}=${value}`);
+        return;
+      }
+
+      throw new Error("Config action must be get or set.");
+    }
+
     const workspace = await requireWorkspace();
     const config = await loadConfig(workspace);
 
@@ -405,6 +609,69 @@ sourcesCommand
     }
   });
 
+const memoryCommand = program
+  .command("memory")
+  .description("Manage optional compact session memory.")
+  .summary("Add, list, and prune retention-bound session memory notes.")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
+  $ kbx memory add "ADR follow-up: revisit hooks after MCP adapters settle." --title "Hook follow-up" --retention-days 14
+  $ kbx memory list
+  $ kbx memory prune
+
+Session memory stores compact notes under .kbx/sessions and indexes them only after explicit retention is provided.
+`);
+
+memoryCommand
+  .command("add")
+  .description("Add a compact session memory note and index it.")
+  .argument("<text>", "compact summary or event to remember")
+  .option("--title <title>", "short memory title")
+  .requiredOption("--retention-days <days>", "number of days before this memory expires", parsePositiveInteger)
+  .action(async (text: string, options: { title?: string; retentionDays: number }) => {
+    const workspace = await requireWorkspace();
+    const { entry, source } = await addSessionMemory(workspace, {
+      text,
+      title: options.title,
+      retentionDays: options.retentionDays
+    });
+    const result = await ingestSource(workspace, source);
+    console.log(`Added session memory ${entry.id} (${entry.title}).`);
+    console.log(`Expires: ${entry.expires_at}`);
+    console.log(`Indexed ${result.chunks} chunk(s).`);
+  });
+
+memoryCommand
+  .command("list")
+  .description("List compact session memory notes.")
+  .action(async () => {
+    const workspace = await requireWorkspace();
+    const entries = await listSessionMemories(workspace);
+    if (entries.length === 0) {
+      console.log("No session memories.");
+      return;
+    }
+
+    for (const entry of entries) {
+      console.log(`${entry.id.slice(0, 8)}  ${entry.title}  expires ${entry.expires_at}`);
+    }
+  });
+
+memoryCommand
+  .command("prune")
+  .description("Delete expired session memories and refresh their index source.")
+  .action(async () => {
+    const workspace = await requireWorkspace();
+    const expired = await pruneExpiredSessionMemories(workspace);
+    const source = sessionMemorySource(await loadSources(workspace));
+    if (source) {
+      await ingestSource(workspace, source);
+    }
+    console.log(`Pruned ${expired.length} expired session memory note(s).`);
+  });
+
 program
   .command("doctor")
   .description("Diagnose environment and workspace health.")
@@ -444,6 +711,7 @@ const modelCommand = program
 Examples:
   $ kbx model list
   $ kbx model benchmark
+  $ kbx model load ./nomic-model --as nomic
   $ kbx model use minilm --reindex
 `);
 
@@ -454,10 +722,25 @@ modelCommand
   .action(async () => {
     const workspace = await findWorkspace(process.cwd());
     const currentModel = workspace ? (await loadManifest(workspace)).model : "";
-    console.log("ID          Size      Dim   Profile    Selected  Description");
+    console.log("ID          Accuracy  Size      Dim    Speed       Memory   Profile    Installed  Selected  Best for");
     for (const model of MODEL_CATALOG) {
       const selected = model.model === currentModel ? "yes" : "no";
-      console.log(`${model.id.padEnd(11)} ${model.size.padEnd(9)} ${String(model.dim).padEnd(5)} ${model.profile.padEnd(10)} ${selected.padEnd(9)} ${model.description}`);
+      const [benchmark, installed] = await Promise.all([
+        cachedModelBenchmark(model.model, model.dim),
+        isCatalogModelInstalled(model)
+      ]);
+      console.log([
+        model.id.padEnd(11),
+        model.accuracy.padEnd(9),
+        model.size.padEnd(9),
+        `${model.dim}d`.padEnd(6),
+        formatBenchmarkSpeed(benchmark, model.speed).padEnd(11),
+        model.memory.padEnd(8),
+        model.profile.padEnd(10),
+        (installed ? "yes" : "no").padEnd(10),
+        selected.padEnd(9),
+        model.bestFor
+      ].join(" "));
     }
   });
 
@@ -499,10 +782,28 @@ Examples:
   });
 
 modelCommand
+  .command("load")
+  .description("Install a catalog model from a local directory for offline use.")
+  .summary("Copy a Transformers.js-compatible model directory into the local model cache.")
+  .argument("<path>", "local model directory containing config.json and onnx/*.onnx")
+  .option("--as <model-id>", "catalog model ID this local directory provides")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx model load ./all-MiniLM-L6-v2 --as minilm
+  $ kbx model load ./nomic-embed-text-v1.5 --as nomic
+`)
+  .action(async (modelPath: string, options: { as?: string }) => {
+    const model = options.as ? resolveModel(options.as) : inferModelFromPath(modelPath);
+    const destination = await loadCatalogModelFromPath(model, modelPath);
+    console.log(`Loaded ${model.id} into ${destination}`);
+  });
+
+modelCommand
   .command("use")
   .description("Select a supported embedding model.")
   .summary("Switch model selection; use --reindex when indexed content exists.")
-  .argument("<model-id>", "catalog model ID")
+  .argument("[model-id]", "catalog model ID")
   .option("--reindex", "reset and rebuild from sources after switching")
   .option("-y, --yes", "skip confirmation")
   .addHelpText("after", `
@@ -514,9 +815,12 @@ Examples:
 
 When indexed content exists, kbx rebuilds into a temporary index before swapping it in.
 `)
-  .action(async (modelId: string, options: { reindex?: boolean; yes?: boolean }) => {
+  .action(async (modelId: string | undefined, options: { reindex?: boolean; yes?: boolean }) => {
     const workspace = await requireWorkspace();
-    const model = resolveModel(modelId);
+    const model = await resolveRequestedModel(modelId, { interactive: true });
+    if (!model) {
+      throw new Error("No model selected.");
+    }
     const manifest = await loadManifest(workspace);
     if (manifest.model === model.model && manifest.dim === model.dim) {
       console.log(`Model already selected: ${model.id}`);
@@ -525,12 +829,22 @@ When indexed content exists, kbx rebuilds into a temporary index before swapping
 
     const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
     const hasIndex = Object.keys(stats.files).length > 0;
+    let confirmedReindex = false;
     if (hasIndex && options.reindex !== true) {
-      throw new Error("Switching models requires rebuilding vectors. Re-run with --reindex.");
+      if (!process.stdin.isTTY) {
+        throw new Error("Switching models requires rebuilding vectors. Re-run with --reindex in non-interactive mode.");
+      }
+      const ok = await confirmAction(`Switch to ${model.id} and rebuild the current workspace index?`);
+      if (!ok) {
+        console.log("Cancelled.");
+        return;
+      }
+      options.reindex = true;
+      confirmedReindex = true;
     }
 
-    if (hasIndex) {
-      const ok = options.yes === true || await confirmAction(`Switch to ${model.id} and rebuild the current workspace index?`);
+    if (hasIndex && options.reindex === true && options.yes !== true && !confirmedReindex) {
+      const ok = await confirmAction(`Switch to ${model.id} and rebuild the current workspace index?`);
       if (!ok) {
         console.log("Cancelled.");
         return;
@@ -553,6 +867,34 @@ When indexed content exists, kbx rebuilds into a temporary index before swapping
     }
 
     console.log(`Selected model ${model.id} (${model.dim}d).`);
+  });
+
+const evalCommand = program
+  .command("eval")
+  .description("Run local quality evaluations.")
+  .summary("Evaluate retrieval quality against a small JSON corpus.");
+
+evalCommand
+  .command("retrieval")
+  .description("Evaluate search results against expected source files.")
+  .argument("<corpus>", "JSON array of { id, query, relevant: [source] } cases")
+  .option("-k, --top-k <number>", "number of hits to evaluate per query", parsePositiveInteger, 5)
+  .option("--reranker <mode>", "optional reranker mode: none or command", "none")
+  .option("--reranker-command <command>", "external reranker command")
+  .action(async (corpusPath: string, options: { topK: number; reranker: "none" | "command"; rerankerCommand?: string }) => {
+    const workspace = await requireWorkspace();
+    const cases = parseRetrievalEvalCorpus(await readFile(path.resolve(corpusPath), "utf8"));
+    const resultsByCaseId = new Map<string, Awaited<ReturnType<typeof searchWorkspace>>>();
+    for (const testCase of cases) {
+      resultsByCaseId.set(testCase.id, await searchWorkspace(workspace, testCase.query, options.topK, {
+        reranker: {
+          mode: options.reranker,
+          command: options.rerankerCommand
+        }
+      }));
+    }
+    const summary = evaluateRetrieval(cases, resultsByCaseId, options.topK);
+    console.log(JSON.stringify(summary, null, 2));
   });
 
 program.exitOverride();
@@ -717,11 +1059,92 @@ async function resolveInitRoot(targetPath: string, options: { here?: boolean; gi
     }
     return gitRoot;
   }
+  if (targetPath === ".") {
+    const gitRoot = await findGitRoot(process.cwd());
+    if (gitRoot && path.resolve(gitRoot) !== path.resolve(process.cwd())) {
+      const userConfig = await loadUserConfig();
+      const preferred = userConfig.init.root_preference === "git-root" ? gitRoot : process.cwd();
+      if (!process.stdin.isTTY) {
+        return preferred;
+      }
+
+      const selected = await select({
+        message: "Choose workspace root for .kbx/",
+        initialValue: preferred,
+        options: [
+          {
+            value: process.cwd(),
+            label: "Current directory",
+            hint: process.cwd()
+          },
+          {
+            value: gitRoot,
+            label: "Git root",
+            hint: gitRoot
+          }
+        ]
+      });
+      if (isCancel(selected)) {
+        throw new Error("Workspace initialization cancelled.");
+      }
+      return String(selected);
+    }
+  }
   return path.resolve(targetPath);
 }
 
 function modelLabel(modelName: string): string {
   return MODEL_CATALOG.find((entry) => entry.model === modelName)?.id ?? modelName;
+}
+
+function inferModelFromPath(modelPath: string): ModelCatalogEntry {
+  const normalized = modelPath.replaceAll("\\", "/").toLowerCase();
+  const basename = path.basename(modelPath).toLowerCase();
+  const match = MODEL_CATALOG.find((model) => {
+    const repoName = model.model.split("/").at(-1)?.toLowerCase() ?? "";
+    return basename === model.id.toLowerCase()
+      || basename === repoName
+      || normalized.endsWith(`/${model.id.toLowerCase()}`)
+      || normalized.endsWith(`/${repoName}`)
+      || normalized.includes(`/${repoName}/`);
+  });
+  if (!match) {
+    throw new Error("Could not infer catalog model from path. Pass --as <model-id>.");
+  }
+  return match;
+}
+
+async function resolveRequestedModel(
+  modelId: string | undefined,
+  options: { interactive: boolean }
+): Promise<ModelCatalogEntry | undefined> {
+  if (modelId) {
+    return resolveModel(modelId);
+  }
+
+  if (!options.interactive) {
+    return undefined;
+  }
+
+  if (!process.stdin.isTTY) {
+    throw new Error("Model selection requires an interactive terminal. Pass --model <model-id> instead.");
+  }
+
+  const selected = await select({
+    message: "Choose a local embedding model",
+    initialValue: "nomic",
+    options: MODEL_CATALOG.map((model) => ({
+      value: model.id,
+      label: `${model.id} - ${model.bestFor}`,
+      hint: modelDetails(model)
+    }))
+  });
+
+  if (isCancel(selected)) {
+    throw new Error("Model selection cancelled.");
+  }
+
+  return resolveModel(String(selected));
 }
 
 async function maybeInitWorkspace() {
@@ -730,13 +1153,14 @@ async function maybeInitWorkspace() {
   }
 
   const shouldInit = await confirm({
-    message: "No kbx workspace found. Initialize one here?",
+    message: "No kbx workspace found. Initialize one now?",
     initialValue: true
   });
   if (isCancel(shouldInit) || shouldInit !== true) {
     return null;
   }
-  return initWorkspace(workspaceFromRoot(process.cwd()).root);
+  const root = await resolveInitRoot(".", {});
+  return initWorkspace(workspaceFromRoot(root).root);
 }
 
 async function requireWorkspace() {
@@ -769,6 +1193,14 @@ function parsePositiveInteger(value: string): number {
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function excerpt(value: string): string {

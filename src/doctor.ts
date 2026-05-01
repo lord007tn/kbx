@@ -1,8 +1,11 @@
 import { performance } from "node:perf_hooks";
+import { generateAllAdapterHooks, validateAllAdapterConfigs } from "./adapters";
 import { createEmbedder } from "./embedding";
 import { listIndexableFileEntries } from "./files";
 import { directorySizeBytes, formatBytes } from "./io";
 import { loadIndexStats } from "./indexer";
+import { LexicalIndexStore } from "./lexical-index";
+import { cachedModelBenchmark, saveModelBenchmarkResult } from "./models";
 import type { IndexStats } from "./types";
 import {
   loadConfig,
@@ -68,10 +71,12 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
     detail: `${Object.keys(stats.files).length} file(s), last ingest ${stats.last_ingest_at || "never"}`
   });
 
+  let vectorChunkCount: number | null = null;
   try {
     const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
     try {
-      lines.push({ ok: true, label: "collection", detail: `${store.docCount} chunk(s), ${formatBytes(await directorySizeBytes(workspace.collectionDir))}` });
+      vectorChunkCount = store.docCount;
+      lines.push({ ok: true, label: "collection", detail: `${vectorChunkCount} chunk(s), ${formatBytes(await directorySizeBytes(workspace.collectionDir))}` });
     } finally {
       store.close();
     }
@@ -80,8 +85,51 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
     lines.push({ ok: false, label: "collection", detail: `${detail}; run kbx ingest to create it, or kbx reset --yes then kbx ingest if it is corrupt` });
   }
 
-  lines.push({ ok: true, label: "model", detail: `${manifest.model} (${manifest.dim}d); run kbx model benchmark to verify local embedding performance` });
+  try {
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      const matchesCollection = vectorChunkCount === null || lexical.chunkCount === vectorChunkCount;
+      lines.push({
+        ok: matchesCollection,
+        label: "lexical",
+        detail: vectorChunkCount === null
+          ? `${lexical.chunkCount} chunk(s); collection count unavailable`
+          : matchesCollection
+            ? `${lexical.chunkCount} chunk(s), matches collection`
+            : `${lexical.chunkCount} chunk(s), collection has ${vectorChunkCount}; run kbx ingest to repair hybrid retrieval`
+      });
+    } finally {
+      await lexical.close();
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    lines.push({ ok: false, label: "lexical", detail: `${detail}; run kbx ingest to repair hybrid retrieval` });
+  }
+
+  const cachedBenchmark = await cachedModelBenchmark(manifest.model, manifest.dim);
+  lines.push({
+    ok: true,
+    label: "model",
+    detail: cachedBenchmark
+      ? `${manifest.model} (${manifest.dim}d); cached benchmark ${cachedBenchmark.chunks_per_second.toFixed(1)} chunks/s from ${cachedBenchmark.measured_at}`
+      : `${manifest.model} (${manifest.dim}d); run kbx model benchmark to verify local embedding performance`
+  });
   lines.push({ ok: true, label: "mcp", detail: `stdio server available via: {"command":"kbx","args":["mcp"]}` });
+  const adapterChecks = validateAllAdapterConfigs();
+  const failedAdapters = adapterChecks.filter((check) => !check.ok);
+  lines.push({
+    ok: failedAdapters.length === 0,
+    label: "mcp-adapters",
+    detail: failedAdapters.length === 0
+      ? `${adapterChecks.length} config template(s) valid`
+      : failedAdapters.map((check) => `${check.adapter}: ${check.detail}`).join("; ")
+  });
+  const hookAdapters = generateAllAdapterHooks();
+  lines.push({
+    ok: hookAdapters.length > 0,
+    label: "hook-adapters",
+    detail: `${hookAdapters.length} hook adapter(s) available${hookAdapters.length > 0 ? `: ${hookAdapters.map((snippet) => snippet.adapter).join(", ")}` : ""}`
+  });
 
   if (options.fresh) {
     lines.push(await freshnessLine(workspace, stats));
@@ -100,6 +148,7 @@ export async function freshnessLine(workspace: Workspace, stats: IndexStats): Pr
   for (const source of sources) {
     for (const file of await listIndexableFileEntries(workspace.root, source.path, {
       includeKbxImports: source.kind === "external_import",
+      includeKbxSessions: source.kind === "session_memory",
       include: source.include,
       exclude: source.exclude,
       useGitignore: source.no_gitignore === true ? false : true
@@ -145,11 +194,23 @@ export async function benchmarkLine(model: string, dim: number): Promise<DoctorL
   ];
   const started = performance.now();
   await embedder.embed(samples);
-  const elapsedSeconds = Math.max((performance.now() - started) / 1000, 0.001);
+  const elapsedMs = Math.max(performance.now() - started, 1);
+  const elapsedSeconds = elapsedMs / 1000;
+  const chunksPerSecond = samples.length / elapsedSeconds;
+  await saveModelBenchmarkResult({
+    model,
+    dim,
+    platform: process.platform,
+    arch: process.arch,
+    measured_at: new Date().toISOString(),
+    samples: samples.length,
+    elapsed_ms: elapsedMs,
+    chunks_per_second: chunksPerSecond
+  });
   return {
     ok: true,
     label: "benchmark",
-    detail: `${(samples.length / elapsedSeconds).toFixed(1)} chunks/s over ${samples.length} sample chunk(s)`
+    detail: `${chunksPerSecond.toFixed(1)} chunks/s over ${samples.length} sample chunk(s); cached machine result`
   };
 }
 

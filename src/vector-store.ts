@@ -5,7 +5,8 @@ import zvec, {
   type ZVecDoc,
   type ZVecStatus
 } from "@zvec/zvec";
-import type { ChunkDetail, EmbeddedChunkRecord, SearchHit } from "./types";
+import { chunkId } from "./chunk";
+import type { ChunkDetail, ChunkRecord, EmbeddedChunkRecord, SearchHit } from "./types";
 import type { Workspace } from "./workspace";
 
 const {
@@ -22,6 +23,7 @@ const {
 } = zvec;
 
 let initialized = false;
+const ZVEC_BATCH_SIZE = 512;
 
 export class ChunkVectorStore {
   private readonly collection: ZVecCollection;
@@ -53,25 +55,27 @@ export class ChunkVectorStore {
       return;
     }
 
-    const statuses = this.collection.upsertSync(
-      chunks.map((chunk) => ({
-        id: chunk.id,
-        fields: {
-          text: chunk.text,
-          source: chunk.source,
-          human_source: chunk.human_source,
-          citation_source: chunk.citation_source,
-          source_origin: chunk.source_origin,
-          chunk_idx: chunk.chunk_idx,
-          mtime: chunk.mtime,
-          tags: chunk.tags
-        },
-        vectors: {
-          embedding: chunk.embedding
-        }
-      }))
-    );
-    assertStatuses(statuses);
+    for (let start = 0; start < chunks.length; start += ZVEC_BATCH_SIZE) {
+      const statuses = this.collection.upsertSync(
+        chunks.slice(start, start + ZVEC_BATCH_SIZE).map((chunk) => ({
+          id: chunk.id,
+          fields: {
+            text: chunk.text,
+            source: chunk.source,
+            human_source: chunk.human_source,
+            citation_source: chunk.citation_source,
+            source_origin: chunk.source_origin,
+            chunk_idx: chunk.chunk_idx,
+            mtime: chunk.mtime,
+            tags: chunk.tags
+          },
+          vectors: {
+            embedding: chunk.embedding
+          }
+        }))
+      );
+      assertStatuses(statuses);
+    }
   }
 
   deleteSource(source: string): void {
@@ -111,6 +115,20 @@ export class ChunkVectorStore {
       chunk_idx: Number(doc.fields.chunk_idx ?? 0),
       mtime: Number(doc.fields.mtime ?? 0)
     };
+  }
+
+  listSourceChunks(source: string, expectedCount: number): ChunkRecord[] {
+    if (expectedCount <= 0) {
+      return [];
+    }
+
+    const chunks: ChunkRecord[] = [];
+    const ids = Array.from({ length: expectedCount }, (_, index) => chunkId(source, index));
+    for (let start = 0; start < ids.length; start += ZVEC_BATCH_SIZE) {
+      const batch = ids.slice(start, start + ZVEC_BATCH_SIZE);
+      chunks.push(...Object.values(this.collection.fetchSync(batch)).map(toChunkRecord));
+    }
+    return chunks.sort((a, b) => a.chunk_idx - b.chunk_idx);
   }
 
   close(): void {
@@ -169,6 +187,24 @@ function toSearchHit(doc: ZVecDoc): SearchHit {
     text: String(doc.fields.text ?? ""),
     match: "vector"
   };
+}
+
+function toChunkRecord(doc: ZVecDoc): ChunkRecord {
+  return {
+    id: doc.id,
+    text: String(doc.fields.text ?? ""),
+    source: String(doc.fields.source ?? ""),
+    human_source: String(doc.fields.human_source ?? ""),
+    citation_source: String(doc.fields.citation_source ?? ""),
+    source_origin: sourceOrigin(doc.fields.source_origin),
+    chunk_idx: Number(doc.fields.chunk_idx ?? 0),
+    mtime: Number(doc.fields.mtime ?? 0),
+    tags: String(doc.fields.tags ?? "")
+  };
+}
+
+function sourceOrigin(value: unknown): ChunkRecord["source_origin"] {
+  return value === "external_import" || value === "session_memory" ? value : "workspace";
 }
 
 function distanceToScore(distance: number): number {

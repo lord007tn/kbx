@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
+import { extractIndexableText } from "./document-text";
 import { toPosixPath } from "./io";
 
 const INDEXABLE_EXTENSIONS = new Set([
@@ -40,7 +41,20 @@ const INDEXABLE_EXTENSIONS = new Set([
   ".yaml",
   ".yml",
   ".toml",
-  ".xml"
+  ".xml",
+  ".pdf",
+  ".docx",
+  ".pptx",
+  ".xlsx",
+  ".epub",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+  ".gif",
+  ".tif",
+  ".tiff",
+  ".bmp"
 ]);
 const DEFAULT_EXCLUDES = [
   ".git/**",
@@ -88,7 +102,7 @@ export interface SourceFileEntry {
 export async function listIndexableFileEntries(
   workspaceRoot: string,
   targetRelativePath: string,
-  options: { includeKbxImports?: boolean; include?: string[]; exclude?: string[]; useGitignore?: boolean } = {}
+  options: { includeKbxImports?: boolean; includeKbxSessions?: boolean; include?: string[]; exclude?: string[]; useGitignore?: boolean } = {}
 ): Promise<SourceFileEntry[]> {
   const targetPath = path.resolve(workspaceRoot, targetRelativePath);
   const targetInfo = await stat(targetPath);
@@ -96,8 +110,8 @@ export async function listIndexableFileEntries(
   const normalizedTargetPath = targetPathRelativeToWorkspace === "" ? "." : targetPathRelativeToWorkspace;
   const gitignore = options.useGitignore === false ? emptyGitignorePolicy() : await loadGitignore(workspaceRoot);
   const globIgnore = globIgnorePatterns([
-    ...builtInGlobExcludes(options.includeKbxImports === true),
-    ...safeGitignoreGlobExcludes(options.includeKbxImports === true ? [] : gitignore.patterns),
+    ...builtInGlobExcludes(managedKbxOptions(options)),
+    ...safeGitignoreGlobExcludes(hasManagedKbxAccess(options) ? [] : gitignore.patterns),
     ...(options.exclude ?? []),
     ...targetScopedPatterns(normalizedTargetPath, options.exclude ?? [])
   ]);
@@ -127,8 +141,8 @@ export async function listIndexableFileEntries(
       return null;
     }
 
-    const isImport = isKbxImport(relativePath);
-    if (isBuiltInExcluded(relativePath, options.includeKbxImports === true) || (!isImport && gitignore.ignores(relativePath))) {
+    const isManagedKbx = isKbxImport(relativePath) || isKbxSession(relativePath);
+    if (isBuiltInExcluded(relativePath, managedKbxOptions(options)) || (!isManagedKbx && gitignore.ignores(relativePath))) {
       return null;
     }
     if ((options.include?.length ?? 0) > 0 && !includeMatcher.ignores(relativePath) && !includeTargetMatcher.ignores(relativePath)) {
@@ -164,19 +178,22 @@ export async function listIndexableFileEntries(
 export async function listIndexableFiles(
   workspaceRoot: string,
   targetRelativePath: string,
-  options: { includeKbxImports?: boolean; include?: string[]; exclude?: string[]; useGitignore?: boolean } = {}
+  options: { includeKbxImports?: boolean; includeKbxSessions?: boolean; include?: string[]; exclude?: string[]; useGitignore?: boolean } = {}
 ): Promise<SourceFile[]> {
   const entries = await listIndexableFileEntries(workspaceRoot, targetRelativePath, options);
   return Promise.all(
     entries.map(async (entry) => ({
       ...entry,
-      content: await readFile(entry.absolutePath, "utf8")
+      content: await extractIndexableText(entry.absolutePath, entry.extension)
     }))
   );
 }
 
-function isBuiltInExcluded(relativePath: string, includeKbxImports: boolean): boolean {
-  if (includeKbxImports && isKbxImport(relativePath)) {
+function isBuiltInExcluded(relativePath: string, options: ManagedKbxOptions): boolean {
+  if (options.includeKbxImports && isKbxImport(relativePath)) {
+    return false;
+  }
+  if (options.includeKbxSessions && isKbxSession(relativePath)) {
     return false;
   }
   const matcher = ignore().add(DEFAULT_EXCLUDES);
@@ -185,6 +202,26 @@ function isBuiltInExcluded(relativePath: string, includeKbxImports: boolean): bo
 
 function isKbxImport(relativePath: string): boolean {
   return relativePath === ".kbx/imports" || relativePath.startsWith(".kbx/imports/");
+}
+
+function isKbxSession(relativePath: string): boolean {
+  return relativePath === ".kbx/sessions" || relativePath.startsWith(".kbx/sessions/");
+}
+
+interface ManagedKbxOptions {
+  includeKbxImports: boolean;
+  includeKbxSessions: boolean;
+}
+
+function managedKbxOptions(options: { includeKbxImports?: boolean; includeKbxSessions?: boolean }): ManagedKbxOptions {
+  return {
+    includeKbxImports: options.includeKbxImports === true,
+    includeKbxSessions: options.includeKbxSessions === true
+  };
+}
+
+function hasManagedKbxAccess(options: { includeKbxImports?: boolean; includeKbxSessions?: boolean }): boolean {
+  return options.includeKbxImports === true || options.includeKbxSessions === true;
 }
 
 interface GitignorePolicy {
@@ -274,11 +311,16 @@ function scopeGlobToTarget(pattern: string, targetRelativePath: string): string 
   return null;
 }
 
-function builtInGlobExcludes(includeKbxImports: boolean): string[] {
-  if (!includeKbxImports) {
+function builtInGlobExcludes(options: ManagedKbxOptions): string[] {
+  if (!options.includeKbxImports && !options.includeKbxSessions) {
     return DEFAULT_EXCLUDES;
   }
-  return DEFAULT_EXCLUDES.filter((pattern) => pattern !== ".kbx/**");
+  return DEFAULT_EXCLUDES.filter((pattern) => {
+    if (pattern !== ".kbx/**") {
+      return true;
+    }
+    return false;
+  });
 }
 
 function targetScopedPatterns(targetRelativePath: string, patterns: string[]): string[] {

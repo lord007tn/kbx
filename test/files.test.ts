@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import JSZip from "jszip";
 import { listIndexableFiles } from "../src/files";
 
 test("listIndexableFiles includes text/code files and excludes built artifacts", async () => {
@@ -15,6 +16,7 @@ test("listIndexableFiles includes text/code files and excludes built artifacts",
     await mkdir(path.join(root, ".agents", "skills"), { recursive: true });
     await mkdir(path.join(root, ".claude", "skills"), { recursive: true });
     await writeFile(path.join(root, "notes.md"), "# Notes\n", "utf8");
+    await writeFile(path.join(root, "deck.pptx"), await makePptx("Deck text token"));
     await writeFile(path.join(root, "src", "index.ts"), "export const value = 1;\n", "utf8");
     await writeFile(path.join(root, "dist", "bundle.js"), "generated();\n", "utf8");
     await writeFile(path.join(root, "packages", "site", "node_modules", "dep", "index.ts"), "export const dep = true;\n", "utf8");
@@ -27,7 +29,8 @@ test("listIndexableFiles includes text/code files and excludes built artifacts",
     await writeFile(path.join(root, "image.png"), "not really an image", "utf8");
 
     const files = await listIndexableFiles(root, ".");
-    assert.deepEqual(files.map((file) => file.relativePath), ["notes.md", "src/index.ts"]);
+    assert.deepEqual(files.map((file) => file.relativePath), ["deck.pptx", "image.png", "notes.md", "src/index.ts"]);
+    assert.match(files.find((file) => file.relativePath === "deck.pptx")?.content ?? "", /Deck text token/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -46,6 +49,40 @@ test("listIndexableFiles reads managed imports only when explicitly requested", 
 
     const importScan = await listIndexableFiles(root, ".kbx/imports/abc/files", { includeKbxImports: true });
     assert.deepEqual(importScan.map((file) => file.relativePath), [".kbx/imports/abc/files/note.md"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function makePptx(text: string): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.folder("ppt")?.folder("slides")?.file("slide1.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${escapeXml(text)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>`);
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+test("listIndexableFiles reads managed session memories only when explicitly requested", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));
+  try {
+    const sessionRoot = path.join(root, ".kbx", "sessions");
+    await mkdir(sessionRoot, { recursive: true });
+    await writeFile(path.join(root, ".gitignore"), ".kbx/\n", "utf8");
+    await writeFile(path.join(sessionRoot, "memory.md"), "# Memory\n", "utf8");
+
+    const workspaceScan = await listIndexableFiles(root, ".");
+    assert.deepEqual(workspaceScan.map((file) => file.relativePath), []);
+
+    const sessionScan = await listIndexableFiles(root, ".kbx/sessions", { includeKbxSessions: true });
+    assert.deepEqual(sessionScan.map((file) => file.relativePath), [".kbx/sessions/memory.md"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

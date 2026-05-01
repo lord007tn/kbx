@@ -54,6 +54,59 @@ export function chunkText(input: ChunkInput): TextChunk[] {
   });
 }
 
+export function chunkSentences(input: ChunkInput): TextChunk[] {
+  const content = input.stripFrontmatter === true ? matter(input.content).content : input.content;
+  const text = content.replace(/\r\n/g, "\n").trim();
+  if (text.length === 0) {
+    return [];
+  }
+
+  const sentences = splitSentences(text);
+  const chunks: TextChunk[] = [];
+  let current = "";
+
+  const flush = () => {
+    const trimmed = current.trim();
+    if (trimmed.length === 0) {
+      current = "";
+      return;
+    }
+
+    if (trimmed.length <= input.maxChars) {
+      const chunkIndex = chunks.length;
+      chunks.push({
+        id: chunkId(input.source, chunkIndex),
+        text: trimmed,
+        chunk_idx: chunkIndex
+      });
+    } else {
+      chunks.push(
+        ...buildChunks({
+          source: input.source,
+          text: trimmed,
+          maxChars: input.maxChars,
+          overlapChars: input.overlapChars,
+          initialIndex: chunks.length
+        })
+      );
+    }
+    current = "";
+  };
+
+  for (const sentence of sentences) {
+    const next = current ? `${current} ${sentence}` : sentence;
+    if (next.length > input.maxChars && current.length > 0) {
+      flush();
+      current = sentence;
+    } else {
+      current = next;
+    }
+  }
+  flush();
+
+  return chunks;
+}
+
 function buildChunks(input: {
   source: string;
   text: string;
@@ -106,6 +159,14 @@ function splitMarkdownSections(text: string): string[] {
   return sections;
 }
 
+function splitSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"`'([])/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
 function findChunkStart(text: string, desiredStart: number): number {
   let start = Math.max(0, desiredStart);
   while (start > 0 && !/\s/.test(text[start - 1] ?? "")) {
@@ -139,6 +200,6 @@ function findChunkEnd(text: string, start: number, maxChars: number): number {
   return hardEnd;
 }
 
-function chunkId(source: string, index: number): string {
+export function chunkId(source: string, index: number): string {
   return crypto.createHash("sha256").update(`${source}:${index}`).digest("hex").slice(0, 24);
 }

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { configureTransformersEnvironment } from "./models";
 import { DEFAULT_MODEL_DIM, DEFAULT_MODEL_ID } from "./types";
 
 export interface Embedder {
@@ -38,7 +39,7 @@ class TransformersEmbedder implements Embedder {
   }
 
   private async loadExtractor(): Promise<unknown> {
-    this.extractor ??= import("@huggingface/transformers").then(({ pipeline }) => {
+    this.extractor ??= configureTransformersEnvironment().then(({ pipeline }) => {
       return pipeline("feature-extraction", this.model);
     });
     return this.extractor;

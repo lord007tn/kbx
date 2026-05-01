@@ -1,14 +1,19 @@
 # PRD — `kbx`: Local-First Knowledge Base CLI
 
-**Status:** Draft v1
+**Status:** Draft v2 — core plus agent helper expansion
 **Owner:** TBD
-**Last updated:** April 30, 2026
+**Last updated:** May 1, 2026
 
 ---
 
 ## 1. Summary
 
 `kbx` is a local-only command-line tool that turns a workspace into a searchable knowledge base for AI assistants. It runs on a laptop with no servers, no cloud calls, and no Python. v1 is CPU-only.
+
+The product now has two layers:
+
+- **kbx Core**: durable local indexing, freshness, storage, embeddings, lexical indexes, and citations.
+- **Agent Helper Layer**: expanded MCP tools, platform adapters, agent guidance, and optional future hook-based automation on top of the core.
 
 The public npm package and CLI binary are both `kbx`. Workspace data lives under `.kbx/`, and MCP tools use the `kbx_` prefix.
 
@@ -19,6 +24,8 @@ kbx ingest                # index the current workspace knowledge base
 kbx search "..."          # retrieve top chunks from the current workspace
 kbx mcp                   # serve to Claude / Cursor / any MCP client
 ```
+
+See `docs/implementation-status.md` for the current shipped foundation.
 
 ---
 
@@ -32,7 +39,10 @@ Existing local RAG setups require Python, Docker, Ollama, or a vector database s
 - **Zero friction to run.** No config required for the default path. Sensible defaults end-to-end.
 - **Fully local.** No network calls after the first model download. Works offline.
 - **CPU-only in v1.** Runs embeddings on CPU by default. GPU acceleration is a later optimization, not a v1 promise.
-- **Useful to AI.** Exposes itself as an MCP server so Claude, Cursor, and similar tools can query it directly.
+- **Useful to AI.** Exposes itself as an MCP server so Claude, Cursor, Codex, Gemini CLI, and similar tools can query and maintain local context.
+- **Hybrid retrieval.** Combine semantic vector search with an ingest-time lexical index for exact symbols, phrases, fuzzy recovery, and BM25-style ranking.
+- **Fresh enough for agents.** Support explicit CLI freshness refresh, a hot index watcher, and bounded opportunistic MCP freshness.
+- **Platform-aware.** Generate and validate platform-specific MCP configs and guidance first; add optional hook adapters only where host hooks are stable.
 - **Light enough for a 4-year-old laptop.** <500 MB RAM at query time, <2 s cold start, default model under 200 MB on disk.
 
 ## 4. Non-goals (v1)
@@ -42,8 +52,11 @@ Existing local RAG setups require Python, Docker, Ollama, or a vector database s
 - A GUI app
 - Real-time collaborative editing
 - Built-in LLM inference for answer generation (we retrieve; the user's AI generates)
-- Reranking in the default retrieval pipeline
-- Document formats beyond markdown, plain text, and code in v1
+- General-purpose sandboxed code execution
+- Cloud telemetry, hosted analytics, or account-backed sync
+- Destructive MCP tools enabled by default
+- LLM-based reranking in the default retrieval pipeline
+- Image/OCR ingest and other rich media formats in v1
 - Fine-tuning support
 
 ## 5. Target users
@@ -63,12 +76,19 @@ Existing local RAG setups require Python, Docker, Ollama, or a vector database s
 kbx init                          # create .kbx/ for the current workspace
 kbx ingest [path] [--watch]       # index this workspace, or a specific path when provided; prompts to init if needed
 kbx search "<query>" [-k 5]       # print top-k chunks from this workspace
+kbx search "<query>" --fresh      # refresh changed/deleted indexed files before searching
+kbx watch                         # keep manifest sources hot during agent sessions
 kbx mcp                           # run as MCP server over stdio
+kbx mcp config [client]           # print client-specific MCP config
+kbx mcp config --list             # list supported client adapters
 kbx workspace list                # list registered workspaces
 kbx workspace forget <selector>   # remove a workspace from the registry only
 kbx workspace delete <selector>   # delete a workspace .kbx/ after confirmation
 kbx sources list                  # list ingest roots and import snapshots
 kbx sources remove <selector>     # remove a source entry and its indexed chunks
+kbx memory add <text> --retention-days <days>
+kbx memory list
+kbx memory prune
 kbx stats                         # show doc count, index size, model
 kbx stats --fresh                 # scan for stale/deleted files without reindexing
 kbx config get|set <key> [value]  # view/edit config
@@ -95,9 +115,9 @@ $ npx kbx ingest
 
 Everything happens with one command. The model download is the only one-time cost.
 
-### 6.3 MCP integration
+### 6.3 MCP and agent integration
 
-The `kbx mcp` command runs an MCP server over stdio. v1 does not expose an SSE or HTTP transport. A user adds this to Claude Desktop or Cursor:
+The `kbx mcp` command runs an MCP server over stdio. v1 does not expose an SSE or HTTP transport. A user adds this to Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, VS Code Copilot, JetBrains Copilot, Zed, OpenCode, Kiro, Qwen Code, Antigravity, Pi, or any compatible MCP client:
 
 ```json
 {
@@ -110,7 +130,15 @@ The `kbx mcp` command runs an MCP server over stdio. v1 does not expose an SSE o
 }
 ```
 
-Then Claude can call `kbx_search`, `kbx_list_sources`, etc. as tools.
+Then the AI assistant can call `kbx_search`, `kbx_get_chunk`, `kbx_index_status`, and related tools.
+
+MCP tools are grouped by safety:
+
+- **Read tools** retrieve chunks, list sources, report status, and return agent guidance.
+- **Maintenance tools** refresh freshness or generate config without deleting user data.
+- **Destructive tools** remove sources, reset indexes, forget workspaces, or delete knowledge base data. They are disabled by default and require both a workspace config gate and a structured confirmation token.
+
+Platform adapters first generate config and guidance. Hook-based agent adapters are a later optional layer for hosts with stable hooks.
 
 ## 7. Technical architecture
 
@@ -120,6 +148,7 @@ Then Claude can call `kbx_search`, `kbx_list_sources`, etc. as tools.
 |---|---|---|
 | Language | TypeScript (strict), Node ≥20 LTS | Asked for; Node 20 has stable fetch, test runner, ESM. |
 | Vector store | `@zvec/zvec` | In-process, no server, native bindings already published for Linux x64/ARM64 + macOS ARM64. Matches "lightweight" goal. |
+| Lexical index | SQLite FTS5 | Local exact-term, symbol, phrase, fuzzy, and BM25-style retrieval without rereading files during search. |
 | Embeddings | `@huggingface/transformers` v3 (Transformers.js) | Pure JS surface; runs ONNX on CPU in v1. No Python, no Ollama. |
 | ONNX backend | `onnxruntime-node` (bundled by Transformers.js) | CPU execution provider in v1. GPU execution providers are deferred. |
 | CLI args | `commander` | Stable, tiny, well-known. Citty was considered; less ecosystem. |
@@ -127,6 +156,7 @@ Then Claude can call `kbx_search`, `kbx_list_sources`, etc. as tools.
 | Markdown parsing | `gray-matter` + `remark` | Frontmatter + AST traversal for smart chunking on heading boundaries. |
 | File watching | `chokidar` | Defacto standard. |
 | MCP server | `@modelcontextprotocol/sdk` | Official SDK, stdio transport. |
+| Platform adapters | TypeScript adapter registry | Keep client config, notes, and validation in one typed surface before adding hooks. |
 | Logging | `pino` (silent by default) | Structured logs to file, never stdout unless `--verbose`. |
 | Tests | Node built-in test runner + `tsx` | No Jest. Keep deps minimal. |
 | Build | `tsup` | Single-file ESM bundle. |
@@ -145,25 +175,39 @@ v1 platform support follows the published `@zvec/zvec` native bindings:
 | macOS Intel | Unsupported in v1 |
 | Windows ARM | Unsupported in v1 |
 
-### 7.3 Retrieval-only search
+### 7.3 Core and agent boundary
 
 `kbx search` returns relevant chunks and human-readable source metadata. MCP tools return privacy-preserving citation metadata. Neither surface synthesizes answers. The `ask` command name is reserved for a later integration with tools like Codex CLI or Claude CLI, where a user's existing AI subscription can generate answers from retrieved local context.
 
-`kbx search` is a fast read against the current index. It does not scan the filesystem, refresh stale files, or auto-ingest changes before querying in v1. Users refresh explicitly with `kbx ingest` or `kbx ingest --watch`. `kbx stats` and `kbx doctor` surface freshness information.
+The agent helper layer may refresh, search, cite, manage sources, and provide platform guidance, but it does not turn `kbx` into a general command sandbox. Sandboxed execution is explicitly out of scope for this roadmap.
 
-MCP search follows the same rule: no auto-refresh or filesystem scan during tool calls. The v1 MCP server is read-only.
+### 7.4 Hybrid retrieval pipeline
 
-### 7.4 Why Transformers.js over Ollama
+The default retrieval direction is hybrid:
+
+1. Ingest chunks once.
+2. Write chunk records to the Zvec vector store.
+3. Write the same chunk records to a SQLite FTS5 lexical index.
+4. At query time, run vector and lexical searches in parallel.
+5. Merge candidates with deterministic retrieval fusion, initially Reciprocal Rank Fusion.
+6. Apply lightweight deterministic boosts for exact phrase, source/title match, term proximity, and freshness.
+7. Return cited chunks and query-centered snippets.
+
+The lexical index should support exact terms, symbols, filenames, phrase matching, fuzzy correction, and BM25-style ranking. The current implementation uses SQLite FTS5/BM25 storage so search is fast, consistent, and index-bound at larger scale.
+
+LLM-based reranking remains separate from retrieval fusion. It can be revisited after the hybrid baseline has real-world quality and latency data.
+
+### 7.5 Why Transformers.js over Ollama
 
 Ollama is great but adds a separate install, a background daemon, and a network call. Transformers.js runs the model in-process, in pure JS. A user installs `kbx` and has embeddings — no second tool to install. Quality is identical because the underlying model weights are the same; only the runtime differs.
 
-### 7.5 CPU strategy
+### 7.6 CPU strategy
 
 v1 runs embeddings on CPU only. GPU acceleration through CoreML, CUDA, DirectML, or WebGPU is deferred until after the core workspace retrieval flow is stable and benchmarked.
 
 `kbx doctor` reports CPU embedding support, model cache state, workspace health, and benchmark results. It may report detected GPU hardware later, but v1 does not select a GPU execution provider.
 
-### 7.6 Embedding model catalog
+### 7.7 Embedding model catalog
 
 v1 exposes supported embedding models as a catalog rather than asking users to type arbitrary model names. The catalog shows model size, dimensions, benchmark results, and a plain-language tradeoff.
 
@@ -201,7 +245,7 @@ The default model is chosen from the catalog based on measured balance of downlo
 
 Switching models requires a rebuild because vectors are not interchangeable across models. `kbx model use <model-id>` is transactional: if indexed content already exists, it prompts to reindex the current workspace before committing the model change. If the user declines, the selected model and index remain unchanged. In non-interactive mode, model switching requires an explicit `--reindex` flag. Model switch reindex rebuilds from `.kbx/sources.json`.
 
-### 7.7 Workspace scoping
+### 7.8 Workspace scoping
 
 v1 scopes each knowledge base to the initialized workspace where `kbx` is run. An initialized workspace is marked by a `.kbx/` directory. Running `kbx` from `/work/project-a` or one of its subdirectories searches and serves `/work/project-a/.kbx/`; running it from `/work/project-b` searches and serves `/work/project-b/.kbx/`. `kbx ingest` adds or updates sources inside the current workspace knowledge base, not a user-global corpus. When no path is provided, it ingests the current initialized workspace root. Passing a path narrows ingest to that file or folder inside the same workspace knowledge base.
 
@@ -235,7 +279,7 @@ Workspace names are not required to be unique. Commands that accept a workspace 
 
 `kbx reset` is scoped to the current initialized workspace. It clears indexed content and derived collection files, but preserves `.kbx/config.json`, `manifest.json`, workspace ID, workspace name, and the registry entry. It is used when rebuilding the current index, not when removing the workspace.
 
-### 7.8 Storage layout
+### 7.9 Storage layout
 
 The storage location must preserve workspace scoping:
 
@@ -244,6 +288,9 @@ The storage location must preserve workspace scoping:
 ├── config.json                     workspace settings
 ├── manifest.json                   {workspace_id, name, model, dim, schema_version}
 ├── sources.json                    ingest roots and import snapshots
+├── stats.json                      ingest and freshness metadata
+├── lexical.db                      SQLite FTS5 lexical chunk index
+├── sessions/                       optional compact session memory, disabled by default
 ├── imports/                        copied files from --allow-external
 └── collection/                     Zvec collection directory
     └── ...                         Zvec internal files
@@ -267,6 +314,8 @@ Downloaded model weights may use the normal Hugging Face cache and be shared acr
 ```
 
 Rebuild operations, including model switch reindex, use `sources.json` rather than implicitly scanning the entire workspace.
+
+Session memory is a separate optional source kind. It stores compact summaries or events, not hidden full transcripts, and requires an explicit retention policy on each added memory before it is indexed.
 
 `sources.json` is normalized after each ingest. When a broader workspace root covers an existing narrower workspace root, the broader root replaces the child entry. For example, after `kbx ingest docs`, a later `kbx ingest` records only `{ "path": ".", "kind": "workspace" }` for workspace files.
 
@@ -295,7 +344,9 @@ The user-level registry maps workspace IDs to display metadata:
 }
 ```
 
-### 7.9 Schema (Zvec collection)
+### 7.10 Schemas
+
+#### 7.10.1 Vector collection
 
 Validated against `@zvec/zvec` 0.3.2: the Node SDK supports scalar metadata fields, `VECTOR_FP32`, HNSW with cosine metric, output field selection, persistent create/open by filesystem path, query filters, and delete-by-filter. Zvec filter equality uses SQL-like `=`, not JavaScript-style `==`.
 
@@ -326,12 +377,26 @@ Validated against `@zvec/zvec` 0.3.2: the Node SDK supports scalar metadata fiel
 }
 ```
 
-### 7.10 Ingest policy
+#### 7.10.2 Lexical index
+
+The lexical index stores the same chunk identity and source metadata as the vector store. It should support:
+
+- FTS5 porter or unicode tokenization for BM25-style ranking.
+- Trigram or equivalent substring search for symbols and partial terms.
+- Source and content-type filters.
+- Query-centered snippet extraction.
+- Per-source and per-file deletion.
+- Optional vocabulary table for fuzzy correction.
+
+The lexical index is derived data. Reset, model switch reindex, source removal, and freshness refresh must keep it consistent with the vector store.
+
+### 7.11 Ingest policy
 
 v1 uses a conservative default ingest policy. It respects `.gitignore`, uses built-in excludes, and indexes only text-like file types.
 
 Included by default:
 - Markdown and prose: `.md`, `.mdx`, `.txt`
+- Documents: `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.epub`
 - Common source files: TypeScript, JavaScript, Python, Go, Rust, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Shell, SQL, HTML, CSS, JSON, YAML, TOML, XML
 
 Always excluded:
@@ -372,25 +437,33 @@ kbx config set mcp.citations full-path  # expose precise paths to MCP clients
 
 `safe` hides absolute external paths. `full-path` exposes full workspace-relative paths and full original external paths so MCP clients can open or reference files precisely.
 
-### 7.11 Chunking
+### 7.12 Chunking
 
 Default: heading-aware for markdown and fixed-size text-aware chunking for plain text and source code. Walk the markdown AST; emit one chunk per leaf section, splitting further if a section exceeds `max_chunk_chars` (default 800). Adjacent chunks share a 100-char overlap. Code blocks are kept intact (never split mid-block).
 
 Configurable: `kbx config set chunk.size 800`, `kbx config set chunk.overlap 100`, `kbx config set chunk.strategy heading|fixed|sentence`.
 
-### 7.12 Incremental reindex
+### 7.13 Incremental reindex and freshness
 
 Each chunk's ID is `hash(filepath + chunk_index)`. On reingest:
 1. List markdown files; check `mtime` against stored values.
-2. For changed files: delete by filter `source = '<path>'`, then re-embed and insert.
-3. For deleted files: delete by filter.
+2. For changed files: delete by filter `source = '<path>'` from vector and lexical stores, then re-chunk, re-embed, and insert.
+3. For deleted files: delete by filter from vector and lexical stores.
 4. Untouched files: skip entirely.
 
 This makes `--watch` mode cheap.
 
 `kbx ingest --watch` has the same workspace boundaries as normal ingest. It watches the current manifest sources, or the provided ingest target after the initial ingest. It does not watch original external paths. If `.kbx/imports/` snapshots are present in `sources.json`, it watches those copied files. It respects the same ingest policy and does not mutate `sources.json` after startup except for the initial ingest target.
 
-### 7.13 Stats and freshness
+Freshness behavior:
+
+- `kbx search` is a fast read by default.
+- `kbx search --fresh` refreshes configured sources before searching.
+- `kbx watch` or `kbx ingest --watch` keeps manifest sources hot during active work.
+- MCP search may run opportunistic freshness within a small change-count budget before returning results.
+- Full workspace reindex remains explicit.
+
+### 7.14 Stats and freshness
 
 `kbx stats` is cheap by default and reports stored metadata:
 
@@ -415,31 +488,60 @@ This makes `--watch` mode cheap.
 
 Expensive checks are explicit: `kbx doctor --fresh` scans source mtimes and deletions, `kbx doctor --bench` runs local embedding/index benchmarks, and `kbx doctor --deep` combines freshness, benchmark, and registry repair suggestions.
 
-### 7.14 MCP server surface
+### 7.15 MCP server surface
 
 ```ts
-tools = [
-  {
-    name: "kbx_search",
-    description: "Search the user's personal knowledge base by semantic similarity.",
-    parameters: { query: string, top_k?: number, filter?: string }
-  },
-  {
-    name: "kbx_list_sources",
-    description: "List indexed source files."
-  },
-  {
-    name: "kbx_get_chunk",
-    description: "Fetch a specific chunk by id (e.g. for citation expansion)."
-  },
-  {
-    name: "kbx_index_status",
-    description: "Report workspace index status, including last ingest time, document count, model, and freshness-check metadata."
-  }
+readTools = [
+  "kbx_search",
+  "kbx_search_many",
+  "kbx_get_chunk",
+  "kbx_list_sources",
+  "kbx_index_status",
+  "kbx_agent_guide"
+]
+
+maintenanceTools = [
+  "kbx_refresh_index",
+  "kbx_refresh_file",
+  "kbx_watch_status",
+  "kbx_mcp_config"
+]
+
+destructiveTools = [
+  "kbx_remove_source",
+  "kbx_reset_index",
+  "kbx_forget_workspace",
+  "kbx_delete_workspace_kb"
 ]
 ```
 
-The MCP server is stateless beyond the open Zvec collection. No write tools in v1 — AI assistants can read but not modify the index.
+Read tools are enabled by default. Maintenance tools are enabled by default only when they cannot delete user data. Destructive tools are disabled by default and require:
+
+1. Workspace config gate, for example `mcp.destructive_tools = "enabled"`.
+2. A per-call confirmation token such as `reset-index:<workspace_id>`.
+3. Clear error responses when the gate or token is missing.
+
+MCP search should return chunk IDs, source citations, match layer, scores, snippets, and next-step guidance. Full chunk text should be fetched through `kbx_get_chunk` unless the caller explicitly requests included text.
+
+### 7.16 Platform adapters and agent hooks
+
+Platform support is staged.
+
+Phase 1 platform adapters:
+
+- Generate client-specific MCP config snippets.
+- Validate likely config location and command shape in `doctor`.
+- Provide client-specific notes and agent guidance.
+- Keep setup read/write scope limited to user-confirmed config generation.
+
+Phase 2 agent hook adapters:
+
+- Add only for platforms with stable hooks.
+- Use hooks for freshness, session context capture, and guidance injection.
+- Do not intercept commands for sandboxed execution.
+- Keep hook behavior optional and independent of basic MCP search.
+
+Initial adapter coverage targets Claude Desktop, Claude Code, Codex, Cursor, Gemini CLI, VS Code Copilot, JetBrains Copilot, Zed, OpenCode, Kilo, Kiro, Qwen Code, Antigravity, and Pi.
 
 ## 8. Performance targets
 
@@ -457,13 +559,24 @@ The MCP server is stateless beyond the open Zvec collection. No write tools in v
 
 ## 9. Phasing
 
-### v0.1 — Walking skeleton (1 week)
+### Completed foundation
+
+- Workspace init, registry, config, stats, reset, doctor.
+- Ingest, source management, external imports, watch ingest.
+- Zvec vector store, Transformers.js embeddings, model catalog and model switch reindex.
+- Heading/fixed/sentence chunking.
+- Baseline hybrid search with vector search plus persistent lexical matching.
+- Stdio MCP server with read tools and agent guidance.
+- Platform config adapters.
+- Passing typecheck and 52-test suite.
+
+### v0.1 — Walking skeleton
 - `kbx ingest` and `kbx search` only
 - Default model hardcoded
 - CPU only
 - Markdown only, fixed-size chunks
 
-### v0.2 — Production basics (2 weeks)
+### v0.2 — Production basics
 - CPU embedding benchmark and regression guard
 - Heading-aware chunking
 - Incremental reindex
@@ -472,13 +585,28 @@ The MCP server is stateless beyond the open Zvec collection. No write tools in v
 - `kbx sources list`, `kbx sources remove <selector>`
 - `--watch` mode
 
-### v0.3 — Integration (1 week)
+### v0.3 — Integration
 - `kbx mcp` server
 - Configurable model with safety check on swap
 
-### v0.4 — Polish (1 week)
+### v0.4 — Agentic retrieval upgrade
+- Ingest-time SQLite FTS5 lexical index. **Implemented.**
+- Hybrid retrieval fusion across vector and lexical candidates. **Implemented.**
+- Query-centered snippets, exact phrase/source boosts, fuzzy correction, and proximity boosts. **Implemented.**
+- Remove live file reread/rechunk from default search path. **Implemented.**
+- `kbx search --fresh` and bounded MCP opportunistic freshness. **Implemented.**
+- Expanded MCP read and maintenance tools. **Implemented.**
+
+### v0.5 — Platform and agent helper layer
+- Platform adapter validation in `doctor`.
+- Expanded `kbx mcp config` coverage and client-specific guidance.
+- Destructive MCP tools behind config gate and confirmation tokens.
+- Optional session memory source with explicit retention policy. **Implemented for CLI-managed compact notes.**
+- Initial hook adapter spike for one stable host. **Implemented for Claude Code file-edit freshness refresh.**
+
+### v0.6 — Polish
 - `kbx doctor --bench`
-- Plain text + source code ingest
+- Plain text, source code, PDF, and DOCX ingest
 - Improved CLI output (colors, progress bars done right)
 - Docs site
 
@@ -497,14 +625,19 @@ The MCP server is stateless beyond the open Zvec collection. No write tools in v
 | First-run model download fails on metered/slow connections | Resumable download via HF cache; allow `kbx model load <path>` for offline install. |
 | Users swap models and corrupt their index | Model changes are transactional and require reindex before commit; `manifest.json` still checks model/dimension on every open. |
 | Windows ARM / odd platforms not supported by Zvec | v1 ships Linux x64/ARM64 + macOS ARM64 + Windows x64. Document the gap; add as Zvec adds support. |
+| Hybrid index drift between vector and lexical stores | Treat both as derived stores updated through one indexer path; add consistency checks to doctor and tests. |
+| MCP destructive tools delete data accidentally | Disable by default; require explicit config gate and confirmation token. |
+| Hook adapters create platform-specific fragility | Ship config adapters first; add hooks only where host behavior is stable and covered by tests. |
+| Agent helper layer expands into a command sandbox | Keep sandboxed execution out of scope; record this in ADR 0001. |
 
 ## 11. Deferred questions
 
 1. **How should `kbx ask` integrate with external AI CLIs?** v1 does not ship answer generation. Reserve `kbx ask` for a later integration with tools like Codex CLI or Claude CLI using the user's existing local subscription. If direct local generation is needed later, plug into Ollama via HTTP as an optional integration.
-2. **When should reranking be added?** Reranking is out of v1. Revisit after baseline vector retrieval quality and latency are measured on real workspaces.
+2. **When should LLM reranking be added?** LLM reranking is out of the default pipeline. Revisit after hybrid retrieval quality and latency are measured on real workspaces.
 3. **Global search across workspaces?** v1 scopes search to the current workspace. Later, `kbx search --global` or a dedicated global command can fan out across the workspace registry and query multiple workspace knowledge bases in parallel.
-4. **PDF and DOCX ingest?** Pulls in `pdf-parse` and friends. Probably v1.1 — measure demand first.
+4. **Additional document formats beyond PDF, DOCX, PPTX, XLSX, and EPUB?** Measure demand before adding heavier extractors such as image/OCR pipelines.
 5. **Single binary via `bun build --compile`?** Possibly faster route than Node SEA. Test in v0.4.
+6. **Session memory retention defaults?** Session memory now requires explicit per-entry retention. Default retention remains intentionally unset.
 
 ## 12. Success metrics (post-launch)
 

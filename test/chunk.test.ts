@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkMarkdown } from "../src/chunk";
+import { chunkMarkdown, chunkSentences } from "../src/chunk";
 
 test("chunkMarkdown removes frontmatter and chunks markdown text", () => {
   const chunks = chunkMarkdown({
@@ -70,5 +70,17 @@ test("chunkMarkdown prefers heading sections before fixed splitting", () => {
   assert.equal(chunks.length, 2);
   assert.equal(chunks[0]?.text.includes("# One"), true);
   assert.equal(chunks[0]?.text.includes("## Two"), false);
+  assert.equal(chunks[1]?.chunk_idx, 1);
+});
+
+test("chunkSentences groups complete sentences", () => {
+  const chunks = chunkSentences({
+    source: "notes/sentences.md",
+    content: "Alpha is first. Beta is second. Gamma is third.",
+    maxChars: 32,
+    overlapChars: 5
+  });
+
+  assert.deepEqual(chunks.map((chunk) => chunk.text), ["Alpha is first. Beta is second.", "Gamma is third."]);
   assert.equal(chunks[1]?.chunk_idx, 1);
 });

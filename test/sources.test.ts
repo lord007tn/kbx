@@ -49,6 +49,22 @@ test("normalizeSources keeps external imports separate from workspace root", () 
   assert.deepEqual(normalized.map((source) => source.path), [".", ".kbx/imports/abc/files"]);
 });
 
+test("normalizeSources keeps session memory separate from workspace root", () => {
+  const normalized = normalizeSources([
+    { path: ".", kind: "workspace", include: [], exclude: [] },
+    {
+      path: ".kbx/sessions",
+      kind: "session_memory",
+      include: ["**/*.md"],
+      exclude: [],
+      retention_days: 30,
+      created_at: "2026-05-01T00:00:00.000Z"
+    }
+  ]);
+
+  assert.deepEqual(normalized.map((source) => source.path), [".", ".kbx/sessions"]);
+});
+
 test("coversSource recognizes nested workspace paths", () => {
   assert.equal(coversSource("docs", "docs/adr"), true);
   assert.equal(coversSource("docs", "src"), false);

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { findGitRoot, initWorkspace, loadManifest, registryPath, resolveWorkspaceSelector } from "../src/workspace";
+import { findGitRoot, initWorkspace, loadConfig, loadManifest, registryPath, resolveWorkspaceSelector } from "../src/workspace";
 import type { RegistryEntry } from "../src/types";
 
 const registry: RegistryEntry[] = [
@@ -53,6 +53,37 @@ test("initWorkspace stores an explicitly selected model on first init", async ()
       () => initWorkspace(root, { model: "nomic-ai/nomic-embed-text-v1.5", dim: 768 }),
       /already initialized/
     );
+  } finally {
+    if (originalRegistry === null) {
+      await rm(registryFile, { force: true });
+    } else {
+      await writeFile(registryFile, originalRegistry, "utf8");
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig merges defaults for older workspace config files", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-config-defaults-"));
+  const registryFile = registryPath();
+  const originalRegistry = await readFile(registryFile, "utf8").catch(() => null);
+  try {
+    const workspace = await initWorkspace(root);
+    await writeFile(workspace.configPath, JSON.stringify({
+      chunk: {
+        size: 900,
+        overlap: 120,
+        strategy: "heading"
+      },
+      mcp: {
+        citations: "safe"
+      }
+    }), "utf8");
+
+    const config = await loadConfig(workspace);
+
+    assert.equal(config.chunk.size, 900);
+    assert.equal(config.mcp.destructive_tools, "disabled");
   } finally {
     if (originalRegistry === null) {
       await rm(registryFile, { force: true });

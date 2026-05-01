@@ -16,6 +16,18 @@ _Avoid_: Non-developer, general consumer
 A retrieval operation that returns relevant local chunks and citations without synthesizing an answer.
 _Avoid_: Ask, answer generation
 
+**Hybrid Retrieval Pipeline**:
+A **Knowledge Search** pipeline that indexes chunks into both vector and lexical stores, runs semantic and lexical retrieval in parallel, and merges results before returning cited chunks.
+_Avoid_: Vector-only search, lexical-only search
+
+**Lexical Index**:
+A local full-text index used for exact terms, symbols, filenames, fuzzy recovery, phrase matching, and BM25-style ranking.
+_Avoid_: Live file scan during search
+
+**Retrieval Fusion**:
+The deterministic merge step that combines vector and lexical candidates into one ranked result list.
+_Avoid_: LLM reranker
+
 **Ask**:
 A future command for delegating answer generation to an external AI CLI or subscription-backed assistant.
 _Avoid_: Retrieval-only search
@@ -32,9 +44,37 @@ _Avoid_: Interactive retrieval loop
 A stdio-only local interface that lets AI assistants search **kbx**.
 _Avoid_: SSE server, HTTP server
 
+**MCP Read Tool**:
+An MCP tool that retrieves knowledge, reports status, or provides guidance without mutating indexed content.
+_Avoid_: Hidden side effects
+
+**MCP Maintenance Tool**:
+An MCP tool that updates index freshness, refreshes known files, or generates configuration without deleting user data.
+_Avoid_: Destructive operation
+
+**Destructive MCP Tool**:
+An MCP tool that removes sources, resets indexes, forgets workspaces, or deletes workspace knowledge base data.
+_Avoid_: Enabled by default
+
+**MCP Destructive Gate**:
+A workspace configuration setting that must explicitly enable **Destructive MCP Tool** registration or execution.
+_Avoid_: Agent-controlled deletion without opt-in
+
+**MCP Confirmation Token**:
+A structured confirmation string required by a **Destructive MCP Tool** call, usually including the requested operation and workspace identity.
+_Avoid_: Boolean confirmation
+
 **Workspace Knowledge Base**:
 The `.kbx/` knowledge base attached to the workspace where `kbx` is run.
 _Avoid_: Global knowledge base, user-wide collection
+
+**kbx Core**:
+The durable local indexing and retrieval layer responsible for ingest, freshness, storage, embeddings, lexical indexes, and citations.
+_Avoid_: Agent runtime, platform hooks
+
+**Agent Helper Layer**:
+An optional layer on top of **kbx Core** that exposes richer MCP tools, platform adapters, agent guidance, and future hook-based automation.
+_Avoid_: Replacing the workspace knowledge base
 
 **Initialized Workspace**:
 A workspace that contains a `.kbx/` directory.
@@ -80,6 +120,14 @@ _Avoid_: Index everything
 An explicit ingest mode that snapshots files from outside the workspace into `.kbx/imports/` before indexing them.
 _Avoid_: Index external path in place
 
+**Session Memory Source**:
+An explicit optional source kind that stores compact agent-session summaries or events for later retrieval.
+_Avoid_: Hidden full transcript indexing
+
+**Session Memory Retention**:
+The policy that decides how long **Session Memory Source** entries remain searchable.
+_Avoid_: Permanent session capture by default
+
 **Human Source**:
 A user-facing source label shown in local CLI search results.
 _Avoid_: Internal import path
@@ -95,6 +143,18 @@ _Avoid_: Always expose full paths
 **Supported Platform**:
 A v1 runtime platform covered by published Zvec Node bindings.
 _Avoid_: Best-effort platform
+
+**Platform Adapter**:
+A client-specific integration that generates MCP configuration, validates setup, and provides agent guidance for a supported AI tool.
+_Avoid_: Hook adapter by default
+
+**Agent Hook Adapter**:
+An optional platform integration that uses host hooks to maintain freshness, capture agent context, or inject guidance during agent sessions.
+_Avoid_: Required MCP setup
+
+**Agent Guidance**:
+Client-facing instructions that tell an AI assistant when to search, refresh, fetch chunks, cite sources, and avoid unsafe operations.
+_Avoid_: Marketing copy
 
 **CPU Embedding**:
 The v1 embedding execution mode, using CPU only.
@@ -124,6 +184,14 @@ _Avoid_: Manual manifest edit
 Whether the current index reflects the latest filesystem state.
 _Avoid_: Implicit search refresh
 
+**Freshness Refresh**:
+A bounded update that detects changed or removed indexed files and updates the local index before or during retrieval.
+_Avoid_: Full workspace reindex
+
+**Opportunistic MCP Freshness**:
+A small-budget **Freshness Refresh** performed by MCP search tools so AI assistants are less likely to use stale context.
+_Avoid_: Blocking MCP search on an unbounded filesystem scan
+
 **Stored Stats**:
 Cheap workspace metadata recorded during ingest and index operations.
 _Avoid_: Default filesystem scan
@@ -136,6 +204,10 @@ _Avoid_: Always deep diagnostics
 A long-running ingest mode that refreshes indexed chunks for manifest sources or the provided ingest target.
 _Avoid_: Watching external originals
 
+**Hot Index Watcher**:
+A long-running process that keeps indexed workspace sources current by applying file-level reindex and delete updates as filesystem events arrive.
+_Avoid_: Rebuilding the entire workspace for every change
+
 **Global Workspace Search**:
 A future search mode that queries multiple registered **Workspace Knowledge Bases** in parallel.
 _Avoid_: Merged global index
@@ -144,12 +216,22 @@ _Avoid_: Merged global index
 
 - **kbx** indexes local files into a local knowledge base.
 - **kbx** serves retrieved context to AI assistants through MCP.
+- **kbx Core** owns the local workspace index and retrieval behavior.
+- The **Agent Helper Layer** builds on **kbx Core** and must not be required for basic CLI search.
+- The **Agent Helper Layer** includes expanded MCP tools, platform adapters, agent guidance, and future hook-based automation.
 - An **AI Tool User** uses **kbx** to make local files searchable by their AI assistant.
 - **Knowledge Search** retrieves chunks from **kbx**.
+- The **Hybrid Retrieval Pipeline** is the default direction for **Knowledge Search**.
+- The **Hybrid Retrieval Pipeline** uses vector retrieval for semantic similarity and the **Lexical Index** for exact, symbolic, phrase, and typo-tolerant lookup.
+- **Retrieval Fusion** combines vector and lexical candidates before final result trimming.
 - **Ask** depends on **Knowledge Search** and an external AI assistant.
 - **Reranking** is outside the v1 **Knowledge Search** pipeline.
 - **Chat** depends on answer generation and is outside the v1 retrieval-only scope.
 - The **MCP Server** exposes **Knowledge Search** to AI assistants without opening a network server.
+- **MCP Read Tool** calls are safe to expose by default.
+- **MCP Maintenance Tool** calls may mutate the index to improve freshness but must not delete user data.
+- **Destructive MCP Tool** calls are disabled unless the **MCP Destructive Gate** is explicitly enabled.
+- A **Destructive MCP Tool** also requires an **MCP Confirmation Token** so accidental model calls fail closed.
 - **Knowledge Search** queries the current **Workspace Knowledge Base**.
 - Each workspace has its own **Workspace Knowledge Base**.
 - The **Workspace Registry** records known workspaces without owning their indexed content.
@@ -169,11 +251,17 @@ _Avoid_: Merged global index
 - `.kbx/imports/` is the only indexable area inside `.kbx/`.
 - **External Import** does not sync later changes from the original external path.
 - Re-running **External Import** for the same absolute source path replaces that source's snapshot.
+- **Session Memory Source** is optional and separate from workspace files and **External Import** content.
+- **Session Memory Source** stores compact session memory, not complete hidden transcripts.
+- **Session Memory Retention** must be explicit before session memory is enabled by default.
 - **Human Source** is used in local CLI output; **Citation Source** is used in MCP citations.
 - **Citation Source** hides absolute external paths by default.
 - **Citation Mode** defaults to safe and can be changed to full-path when MCP clients need precise paths.
 - The Zvec-backed chunk store uses SQL-like filter syntax, including `source = '<path>'` for source deletion.
 - v1 **Supported Platform** means macOS Apple Silicon, Linux x64/ARM64, or Windows x64.
+- A **Platform Adapter** is the first level of AI client support and does not require hook capability.
+- An **Agent Hook Adapter** is added only for platforms with stable hook behavior and remains optional.
+- **Agent Guidance** is part of the **Agent Helper Layer** and can be delivered through MCP prompts/resources or client-specific instruction files.
 - v1 uses **CPU Embedding** only; GPU acceleration is deferred.
 - Users choose models from the **Embedding Model Catalog**, which shows size and benchmark tradeoffs.
 - Benchmarking the whole **Embedding Model Catalog** requires explicit `--all` confirmation.
@@ -183,11 +271,13 @@ _Avoid_: Merged global index
 - **Ingest Source Manifest** normalizes overlapping workspace roots so broader roots replace covered child roots.
 - Ingesting a child path already covered by a broader root refreshes that path without narrowing the **Ingest Source Manifest**.
 - **Source Removal** is done through `kbx sources remove`, updates the live index immediately, and refuses covered child paths.
-- **Knowledge Search** reads the current index and does not perform an **Index Freshness** scan by default.
-- The **MCP Server** is read-only in v1 and does not auto-refresh **Index Freshness**.
+- CLI **Knowledge Search** reads the current index by default and performs a **Freshness Refresh** only when requested.
+- MCP **Knowledge Search** may perform **Opportunistic MCP Freshness** within a bounded time budget before returning results.
+- **Freshness Refresh** updates changed files and deletes removed files from both vector and lexical stores.
 - `kbx stats` shows **Stored Stats** by default; freshness scanning is explicit.
 - **Doctor Check** defaults to structural health checks; freshness and benchmark checks require flags.
 - **Watch Ingest** watches current workspace sources only and does not watch original external paths.
+- The **Hot Index Watcher** is the preferred way to keep an index current during active agent sessions.
 
 ## Example dialogue
 
@@ -207,7 +297,7 @@ _Avoid_: Merged global index
 > **Domain expert:** "No. **Chat** depends on answer generation, while v1 is retrieval-only."
 >
 > **Dev:** "Should v1 rerank search results?"
-> **Domain expert:** "No. **Reranking** is post-v1; v1 establishes the vector-search baseline."
+> **Domain expert:** "Do **Retrieval Fusion** now, not model-based **Reranking**. The default direction is the **Hybrid Retrieval Pipeline** with vector and lexical candidates merged deterministically."
 >
 > **Dev:** "Should v1 support MCP over SSE?"
 > **Domain expert:** "No. The **MCP Server** is stdio-only in v1."
@@ -303,10 +393,10 @@ _Avoid_: Merged global index
 > **Domain expert:** "Use **Source Removal** through `kbx sources remove`; it updates the manifest and removes indexed chunks immediately."
 >
 > **Dev:** "Does `kbx search` check the filesystem before every query?"
-> **Domain expert:** "No. **Knowledge Search** is fast and reads the current index. Use ingest, stats, or doctor to check **Index Freshness**."
+> **Domain expert:** "No for default CLI search. Use `kbx search --fresh` or the **Hot Index Watcher** when current filesystem state matters."
 >
 > **Dev:** "Can MCP tools refresh or reindex stale content?"
-> **Domain expert:** "No. The v1 **MCP Server** is read-only. It can report index status but does not mutate the workspace."
+> **Domain expert:** "Yes, through bounded **MCP Maintenance Tool** calls. **Destructive MCP Tool** calls stay disabled unless the **MCP Destructive Gate** and **MCP Confirmation Token** are present."
 >
 > **Dev:** "Does `kbx stats` scan the workspace?"
 > **Domain expert:** "No. It shows **Stored Stats** by default. Use an explicit freshness check for filesystem scanning."
@@ -324,7 +414,7 @@ _Avoid_: Merged global index
 - "non-developer" overstated the v1 audience. Resolved: the v1 audience is **AI Tool Users**.
 - "`ask`" implied built-in answer generation. Resolved: v1 uses **Knowledge Search** through `kbx search`; **Ask** is reserved for later external AI CLI integration.
 - "`chat`" implied answer generation or a confusing search REPL. Resolved: **Chat** is out of v1.
-- Reranking adds another model, latency, and tuning surface. Resolved: **Reranking** is out of v1.
+- "retrieval enhancement" mixed deterministic fusion with model-based reranking. Resolved: **Retrieval Fusion** is part of the **Hybrid Retrieval Pipeline**, while model-based **Reranking** remains later work.
 - "`mcp --sse`" conflicted with the zero-service local promise. Resolved: the v1 **MCP Server** is stdio-only.
 - "default collection" implied a user-global corpus. Resolved: v1 uses a **Workspace Knowledge Base** attached to the workspace where `kbx` is run.
 - "global search" does not mean a single global index. Resolved: **Global Workspace Search** is a future fan-out over the **Workspace Registry**.
@@ -358,8 +448,9 @@ _Avoid_: Merged global index
 - A child ingest under an existing broad root could be misread as narrowing. Resolved: it is a targeted refresh only.
 - Users need to inspect and change indexed roots. Resolved: v1 includes `kbx sources list` and **Source Removal** with `kbx sources remove`.
 - Source removal should affect current search results. Resolved: **Source Removal** deletes matching chunks from the live index immediately.
-- Search-time freshness scans would slow normal queries. Resolved: **Knowledge Search** does not auto-refresh or scan for staleness in v1.
-- MCP should not perform hidden writes or scans. Resolved: the v1 **MCP Server** is read-only and exposes index status without auto-refresh.
+- Search-time freshness scans would slow normal CLI queries. Resolved: CLI **Knowledge Search** stays fast by default and refreshes only through `--fresh` or the **Hot Index Watcher**.
+- MCP agents need fresher context than manual CLI search. Resolved: MCP search may perform **Opportunistic MCP Freshness** within a bounded budget.
+- MCP write access could surprise users. Resolved: split **MCP Read Tool**, **MCP Maintenance Tool**, and **Destructive MCP Tool** surfaces; destructive operations require explicit gate and confirmation token.
 - Stats should stay fast. Resolved: `kbx stats` shows **Stored Stats** by default.
 - Doctor should be useful without becoming slow. Resolved: **Doctor Check** runs expensive freshness and benchmark work only by flag.
 - Watch mode needed tight scope. Resolved: **Watch Ingest** watches workspace-contained sources only.
