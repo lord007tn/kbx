@@ -1,13 +1,11 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import JSZip from "jszip";
-import { missingRuntimeArchiveEntries, runtimeArchiveFormat } from "./release-utils.mjs";
+import { missingRuntimeArchiveEntries, requiredRuntimeArchiveEntries, runtimeArchiveFormat } from "./release-utils.mjs";
 
-const exec = promisify(execFile);
 const checksumsPath = process.argv[2] ?? "dist/artifacts/checksums.txt";
 const artifactDir = path.dirname(checksumsPath);
 const lines = (await readFile(checksumsPath, "utf8"))
@@ -40,8 +38,9 @@ async function verifyArchiveShape(artifactPath, name) {
   if (!format) {
     throw new Error(`Unsupported release artifact type: ${name}`);
   }
-  const entries = format === "zip" ? await zipEntries(artifactPath) : await tarEntries(artifactPath);
-  const missing = missingRuntimeArchiveEntries(name, entries);
+  const missing = format === "zip"
+    ? missingRuntimeArchiveEntries(name, await zipEntries(artifactPath))
+    : await missingTarRuntimeEntries(artifactPath, name);
   if (missing.length > 0) {
     throw new Error(`Artifact ${name} is missing required runtime content: ${missing.join(", ")}`);
   }
@@ -52,7 +51,42 @@ async function zipEntries(artifactPath) {
   return Object.keys(zip.files);
 }
 
-async function tarEntries(artifactPath) {
-  const { stdout } = await exec("tar", ["-tzf", path.resolve(artifactPath)], { windowsHide: true });
-  return stdout.split(/\r?\n/).filter(Boolean);
+async function missingTarRuntimeEntries(artifactPath, name) {
+  const missing = new Set(requiredRuntimeArchiveEntries(name));
+  let buffered = "";
+  const child = spawn("tar", ["-tzf", path.resolve(artifactPath)], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true
+  });
+  const stderr = [];
+
+  child.stdout.on("data", (chunk) => {
+    buffered += chunk.toString("utf8");
+    const lines = buffered.split(/\r?\n/);
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      consumeTarEntry(missing, line);
+    }
+  });
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+  const code = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", resolve);
+  });
+  if (buffered) {
+    consumeTarEntry(missing, buffered);
+  }
+  if (code !== 0) {
+    throw new Error(`tar exited with ${code}: ${Buffer.concat(stderr).toString("utf8").trim()}`);
+  }
+  return [...missing];
+}
+
+function consumeTarEntry(missing, entry) {
+  for (const required of [...missing]) {
+    if (required.endsWith("/") ? entry === required || entry.startsWith(required) : entry === required) {
+      missing.delete(required);
+    }
+  }
 }
