@@ -64,70 +64,9 @@ jobs:
       - name: Install smoke test
         run: npm run smoke:install
 
-  artifacts:
-    name: Build release artifacts (${{ matrix.os }})
-    needs: verify
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
-          - os: macos-14
-            platform: darwin
-            arch: arm64
-          - os: windows-latest
-            platform: win32
-            arch: x64
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Package platform archive
-        run: npm run package:binaries
-        env:
-          KBX_PACKAGE_PLATFORM: ${{ matrix.platform }}
-          KBX_PACKAGE_ARCH: ${{ matrix.arch }}
-          KBX_SIGN_FILE_COMMAND: ${{ secrets.KBX_SIGN_FILE_COMMAND }}
-          KBX_SIGN_FILE_REQUIRED: ${{ secrets.KBX_SIGN_FILE_REQUIRED }}
-          KBX_SIGN_COMMAND: ${{ secrets.KBX_SIGN_COMMAND }}
-          KBX_SIGN_REQUIRED: ${{ secrets.KBX_SIGN_REQUIRED }}
-          KBX_NOTARIZE_COMMAND: ${{ secrets.KBX_NOTARIZE_COMMAND }}
-          KBX_NOTARIZE_REQUIRED: ${{ secrets.KBX_NOTARIZE_REQUIRED }}
-
-      - name: Smoke test platform archive
-        run: npm run smoke:artifact
-        env:
-          KBX_PACKAGE_PLATFORM: ${{ matrix.platform }}
-          KBX_PACKAGE_ARCH: ${{ matrix.arch }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: kbx-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/artifacts/*
-
   publish:
     name: Publish npm package and GitHub release
-    needs: artifacts
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -144,29 +83,17 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      - name: Download platform artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: dist/artifacts
-          merge-multiple: true
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate checksums
-        run: npm run release:checksums
+      - name: Build
+        run: npm run build
 
-      - name: Verify release artifact checksums
-        run: npm run release:verify
+      - name: Verify npm package contents
+        run: npm run smoke:pack
 
-      - name: Attest release artifacts
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: |
-            dist/artifacts/*
-
-      - name: Generate Homebrew formula
-        run: npm run release:homebrew
+      - name: Install smoke test
+        run: npm run smoke:install
 
       - name: Publish to npm
         run: npm publish --access public --provenance
@@ -177,8 +104,5 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: |
-            dist/artifacts/*
-            dist/homebrew/Formula/kbx.rb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

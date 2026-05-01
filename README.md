@@ -8,21 +8,21 @@ Downloaded or offline-loaded model files are cached under the user-level kbx dir
 ## Install
 
 ```bash
-npm install
-npm run build
+npx -y kbx --help
+npx -y kbx init
+npx -y kbx ingest
 ```
 
 ## Development
 
 ```bash
+npm install
 npm run typecheck
 npm test
 npm run build
 npm run release:preflight
 npm run smoke:pack
 npm run smoke:install
-npm run package:binaries
-npm run smoke:artifact
 ```
 
 Use the deterministic hash embedder during development to avoid downloading model weights:
@@ -146,17 +146,9 @@ kbx eval retrieval evals/retrieval.json -k 5
 
 A tiny example corpus lives under `examples/retrieval-eval/`.
 
-## Release Artifacts
+## npm Release
 
-`npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run package:binaries` creates a platform archive under `dist/artifacts/` with its own Node runtime, dependency tree, and `bin/kbx` launcher. `npm run smoke:artifact` extracts that archive and runs `kbx --version` from outside the repo. The release workflow builds Linux, macOS, and Windows archives, verifies checksums and required runtime payloads, emits GitHub artifact attestations, and uploads a generated Homebrew formula.
-
-Release packaging has optional signing and notarization hooks:
-
-- `KBX_SIGN_FILE_COMMAND` runs before the archive is written. Use it for platform runtime files such as the bundled Node executable.
-- `KBX_SIGN_COMMAND` runs after the archive is written and before checksums are generated.
-- `KBX_NOTARIZE_COMMAND` runs after archive signing and before checksums are generated.
-
-Hook commands support `{file}`, `{artifact}`, `{package_root}`, `{platform}`, and `{arch}` placeholders where applicable. Set `KBX_SIGN_FILE_REQUIRED=1`, `KBX_SIGN_REQUIRED=1`, or `KBX_NOTARIZE_REQUIRED=1` in CI when a missing command should fail the release.
+`kbx` is distributed as an npm CLI and is intended to run directly through `npx -y kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with provenance, and creates a generated-notes GitHub release for the tag.
 
 Destructive MCP tools are disabled by default. Enable them only when you want agents to perform delete/reset operations:
 
@@ -168,7 +160,7 @@ See [docs/agent-usage.md](docs/agent-usage.md) for Claude/Codex/Cursor style usa
 
 ## Current Scope
 
-This is pre-release alpha scope. The CLI is usable for local development, smoke testing, release preflight checks, and standalone Node-runtime platform archives.
+This is pre-release alpha scope. The CLI is usable through npm/npx for local development, smoke testing, and release preflight checks.
 
 Implemented:
 
@@ -197,12 +189,11 @@ Implemented:
 - MCP adapter config validation through `doctor`
 - local agent guidance through `kbx agent guide`
 - Claude Code hook adapter for refreshing kbx after Write/Edit/MultiEdit
-- CI and npm release workflow with package dry-run validation
-- release artifact checksums, install smoke test, standalone Node-runtime platform archive packaging, artifact smoke tests, provenance attestations, optional signing hook, and Homebrew formula generation
+- CI and npm release workflow with package dry-run validation, install smoke test, and npm provenance publishing
 - conservative default secret/key/env-file exclusions during ingest
 - example retrieval eval corpus
 
 Non-goals:
 
-- answer generation or chat; kbx stays a retrieval layer
-- Node SEA-style single-file binaries while native addon dependencies require external runtime assets; standalone platform archives are the supported no-system-Node distribution path
+- answer generation, ask mode, or chat; kbx stays a retrieval layer
+- standalone binaries, platform archives, signing/notarization, and Homebrew packaging; npm/npx is the supported distribution path

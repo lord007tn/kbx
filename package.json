@@ -32,12 +32,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "package:binaries": "node scripts/package-binaries.mjs",
-    "release:checksums": "node scripts/generate-checksums.mjs",
-    "release:verify": "node scripts/verify-artifacts.mjs",
-    "release:homebrew": "node scripts/homebrew-formula.mjs",
     "release:preflight": "npm run typecheck && npm test && npm run build && npm run smoke:pack && npm run smoke:install",
-    "smoke:artifact": "node scripts/smoke-artifact.mjs",
     "smoke:install": "node scripts/smoke-install.mjs",
     "smoke:pack": "node scripts/verify-npm-pack.mjs",
     "dev": "tsx src/cli.ts",
@@ -68,7 +63,6 @@
     "esbuild": "^0.28.0",
     "hyparquet": "^1.25.6",
     "hyparquet-compressors": "^1.1.1",
-    "postject": "^1.0.0-alpha.6",
     "tsdown": "^0.21.10",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"

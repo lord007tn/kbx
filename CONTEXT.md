@@ -282,7 +282,7 @@ _Avoid_: Merged global index
 ## Example dialogue
 
 > **Dev:** "Can we call **kbx** a single binary in the first npm-only release?"
-> **Domain expert:** "No. Before v1 it is an npm CLI; at v1 it also ships standalone binaries."
+> **Domain expert:** "No. **kbx** is npm/npx-first; standalone binaries and platform archives are out of scope."
 >
 > **Dev:** "Is the product still called `kb`?"
 > **Domain expert:** "No. The product, npm package, CLI binary, workspace directory, and MCP tool prefix use **kbx**."
@@ -291,7 +291,7 @@ _Avoid_: Merged global index
 > **Domain expert:** "No. The v1 user is an **AI Tool User** who is comfortable with developer-style setup."
 >
 > **Dev:** "Should `kbx ask` return generated answers?"
-> **Domain expert:** "No. v1 exposes **Knowledge Search**; **Ask** is reserved for a later integration with tools like Codex CLI or Claude CLI."
+> **Domain expert:** "No. **Ask** is not part of the product; **kbx** remains retrieval-only."
 >
 > **Dev:** "Should `kbx chat` ship in v1?"
 > **Domain expert:** "No. **Chat** depends on answer generation, while v1 is retrieval-only."
@@ -409,11 +409,11 @@ _Avoid_: Merged global index
 
 ## Flagged ambiguities
 
-- "single-binary" was used alongside npm-first distribution. Resolved: **kbx** is npm-first before v1 and gains standalone binaries at v1.
+- "single-binary" was used alongside npm-first distribution. Resolved: **kbx** is npm/npx-first, and standalone binaries/platform archives are out of scope.
 - "`kb`" was unavailable and too generic as a package identity. Resolved: the product name is **kbx**.
 - "non-developer" overstated the v1 audience. Resolved: the v1 audience is **AI Tool Users**.
-- "`ask`" implied built-in answer generation. Resolved: v1 uses **Knowledge Search** through `kbx search`; **Ask** is reserved for later external AI CLI integration.
-- "`chat`" implied answer generation or a confusing search REPL. Resolved: **Chat** is out of v1.
+- "`ask`" implied built-in answer generation. Resolved: **Ask** is a permanent non-goal; use **Knowledge Search** through `kbx search`.
+- "`chat`" implied answer generation or a confusing search REPL. Resolved: **Chat** is a permanent non-goal.
 - "retrieval enhancement" mixed deterministic fusion with model-based reranking. Resolved: **Retrieval Fusion** is part of the **Hybrid Retrieval Pipeline**, while model-based **Reranking** remains later work.
 - "`mcp --sse`" conflicted with the zero-service local promise. Resolved: the v1 **MCP Server** is stdio-only.
 - "default collection" implied a user-global corpus. Resolved: v1 uses a **Workspace Knowledge Base** attached to the workspace where `kbx` is run.

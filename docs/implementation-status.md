@@ -42,7 +42,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Generic `kbx hook files refresh` handler for clients that expose stable post-edit hooks but do not yet have a first-class adapter.
 - MCP adapter config template validation in `doctor`.
 - Test coverage for adapters, chunking, config, files, indexing, MCP tools, source handling, model catalog, search, vector store, and workspace behavior.
-- CI and npm release workflow with enforced npm package content validation, install smoke tests, normal-branch platform archive smoke tests, standalone Node-runtime release artifacts, checksums, runtime payload verification, GitHub artifact attestations, optional file/archive signing and notarization hooks, generated Homebrew formula, and npm provenance publishing.
+- CI and npm release workflow with enforced npm package content validation, install smoke tests, npm provenance publishing, and generated-notes GitHub releases.
 - Release preflight script that runs typecheck, tests, build, and install smoke checks.
 - Conservative default ingest exclusions for env files, common private keys/certificates, password databases, and `secrets/` directories.
 
@@ -56,5 +56,5 @@ This document records what is already present in the current `kbx` codebase so t
 
 - First-class hook adapter coverage beyond Claude Code still depends on which clients expose stable post-edit lifecycle hooks.
 - Cross-encoder or LLM reranking can be integrated through the command reranker contract, but kbx does not bundle a heavy cross-encoder or generator.
-- Node SEA-style single-file binaries are not the supported path while kbx depends on native addons (`better-sqlite3` and `@zvec/zvec`); standalone Node-runtime archives are the supported distribution artifact for users without system Node.
+- Standalone binaries, platform archives, signing/notarization, and Homebrew packaging are out of scope; npm/npx is the supported distribution path.
 - Answer generation and chat are permanent non-goals; kbx remains a retrieval layer for tools such as Codex and Claude.
