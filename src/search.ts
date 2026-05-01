@@ -2,14 +2,25 @@ import { createEmbedder } from "./embedding";
 import { LexicalIndexStore } from "./lexical-index";
 import { rerankSearchHitsWithOptionalModel } from "./retrieval";
 import type { RerankerOptions } from "./reranker";
-import { loadManifest, type Workspace } from "./workspace";
+import { loadManifest, loadRegistry, type Workspace, workspaceFromRoot } from "./workspace";
 import type { SearchHit } from "./types";
 import { ChunkVectorStore } from "./vector-store";
+import { access } from "node:fs/promises";
+import path from "node:path";
 
 const RRF_K = 60;
 
 export interface SearchWorkspaceOptions {
   reranker?: RerankerOptions;
+}
+
+export interface GlobalSearchHit extends SearchHit {
+  workspace: {
+    id: string;
+    name: string;
+    path: string;
+  };
+  local_source: string;
 }
 
 export async function searchWorkspace(workspace: Workspace, query: string, topK: number, options: SearchWorkspaceOptions = {}): Promise<SearchHit[]> {
@@ -36,6 +47,41 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
     await lexical.close();
   }
   return fuseHits(query, vectorHits, lexicalHits, topK, options);
+}
+
+export async function searchRegisteredWorkspaces(
+  query: string,
+  topK: number,
+  options: SearchWorkspaceOptions = {}
+): Promise<GlobalSearchHit[]> {
+  const hits: GlobalSearchHit[] = [];
+  for (const entry of await loadRegistry()) {
+    const workspace = workspaceFromRoot(entry.path);
+    if (!await exists(workspace.kbxDir)) {
+      continue;
+    }
+
+    try {
+      const workspaceHits = await searchWorkspace(workspace, query, topK, options);
+      hits.push(...workspaceHits.map((hit) => ({
+        ...hit,
+        workspace: {
+          id: entry.workspace_id,
+          name: entry.name,
+          path: entry.path
+        },
+        local_source: hit.source,
+        source: `${entry.name}:${hit.source}`,
+        citation_source: `${entry.name}:${hit.citation_source}`
+      })));
+    } catch {
+      // A missing or corrupt workspace should not make global discovery unusable.
+    }
+  }
+
+  return hits
+    .sort((a, b) => b.score - a.score || a.workspace.name.localeCompare(b.workspace.name) || a.local_source.localeCompare(b.local_source))
+    .slice(0, topK);
 }
 
 async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: SearchHit[], topK: number, options: SearchWorkspaceOptions): Promise<SearchHit[]> {
@@ -69,4 +115,13 @@ async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: Sea
     .map(({ fusionScore: _fusionScore, ...hit }) => hit);
 
   return (await rerankSearchHitsWithOptionalModel(query, fused, options.reranker)).slice(0, topK);
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await access(path.resolve(filePath));
+    return true;
+  } catch {
+    return false;
+  }
 }

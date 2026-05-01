@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import type { SearchHit } from "./types";
 
 export interface RerankerOptions {
-  mode?: "none" | "command";
+  mode?: "none" | "local" | "command";
   command?: string;
   timeoutMs?: number;
 }
@@ -27,8 +27,11 @@ export async function applyOptionalReranker(query: string, hits: SearchHit[], op
   if (mode === "none" || hits.length < 2) {
     return hits;
   }
+  if (mode === "local") {
+    return hits;
+  }
   if (mode !== "command") {
-    throw new Error(`Unknown reranker mode "${mode}". Supported modes: none, command.`);
+    throw new Error(`Unknown reranker mode "${mode}". Supported modes: none, local, command.`);
   }
 
   const command = options.command ?? process.env.KBX_RERANK_COMMAND;

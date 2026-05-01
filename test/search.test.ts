@@ -5,8 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { ingestSource } from "../src/indexer";
 import { writeJson } from "../src/io";
-import { searchWorkspace } from "../src/search";
-import { SCHEMA_VERSION, type SourceEntry, type WorkspaceManifest } from "../src/types";
+import { searchRegisteredWorkspaces, searchWorkspace } from "../src/search";
+import { SCHEMA_VERSION, type RegistryEntry, type SourceEntry, type WorkspaceManifest } from "../src/types";
 import { defaultConfig, workspaceFromRoot } from "../src/workspace";
 
 test("searchWorkspace includes lexical matches for exact symbols", async () => {
@@ -145,6 +145,49 @@ test("searchWorkspace returns query-centered snippets", async () => {
   }
 });
 
+test("searchRegisteredWorkspaces searches every registered workspace", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-global-search-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  const previousHome = process.env.KBX_HOME;
+  const home = path.join(root, "home");
+  process.env.KBX_EMBEDDER = "hash";
+  process.env.KBX_HOME = home;
+  try {
+    const alphaRoot = path.join(root, "alpha");
+    const betaRoot = path.join(root, "beta");
+    const alpha = workspaceFromRoot(alphaRoot);
+    const beta = workspaceFromRoot(betaRoot);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await mkdir(alpha.kbxDir, { recursive: true });
+    await mkdir(beta.kbxDir, { recursive: true });
+    await writeFile(path.join(alphaRoot, "alpha.md"), "# Alpha\n\nglobal shared token alpha\n", "utf8");
+    await writeFile(path.join(betaRoot, "beta.md"), "# Beta\n\nglobal shared token beta\n", "utf8");
+    await writeJson(alpha.manifestPath, { ...manifest("test-model", 3), workspace_id: "alpha-workspace", name: "alpha" });
+    await writeJson(beta.manifestPath, { ...manifest("test-model", 3), workspace_id: "beta-workspace", name: "beta" });
+    await writeJson(alpha.configPath, defaultConfig);
+    await writeJson(beta.configPath, defaultConfig);
+    await writeJson(alpha.sourcesPath, [source]);
+    await writeJson(beta.sourcesPath, [source]);
+    await ingestSource(alpha, source);
+    await ingestSource(beta, source);
+    await mkdir(home, { recursive: true });
+    await writeJson(path.join(home, "registry.json"), [
+      registryEntry("alpha-workspace", "alpha", alphaRoot),
+      registryEntry("beta-workspace", "beta", betaRoot)
+    ]);
+
+    const hits = await searchRegisteredWorkspaces("global shared token", 10);
+
+    assert.deepEqual([...new Set(hits.map((hit) => hit.workspace.name))].sort(), ["alpha", "beta"]);
+    assert.equal(hits.some((hit) => hit.source.startsWith("alpha:")), true);
+    assert.equal(hits.some((hit) => hit.source.startsWith("beta:")), true);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    restoreEnv("KBX_HOME", previousHome);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function manifest(modelName: string, dim: number): WorkspaceManifest {
   return {
     workspace_id: "test-workspace",
@@ -163,4 +206,14 @@ function restoreEnv(name: string, value: string | undefined): void {
   } else {
     process.env[name] = value;
   }
+}
+
+function registryEntry(workspace_id: string, name: string, workspacePath: string): RegistryEntry {
+  return {
+    workspace_id,
+    name,
+    path: workspacePath,
+    created_at: "2026-05-01T00:00:00.000Z",
+    last_seen_at: "2026-05-01T00:00:00.000Z"
+  };
 }

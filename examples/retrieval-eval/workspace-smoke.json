@@ -1,0 +1,12 @@
+[
+  {
+    "id": "readme-install",
+    "query": "install build smoke test",
+    "relevant": ["README.md"]
+  },
+  {
+    "id": "agent-guide",
+    "query": "agent usage guidance MCP search refresh",
+    "relevant": ["docs/agent-usage.md"]
+  }
+]

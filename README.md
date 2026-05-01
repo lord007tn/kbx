@@ -18,6 +18,7 @@ npm run build
 npm run typecheck
 npm test
 npm run build
+npm run release:preflight
 npm run smoke:install
 npm run package:binaries
 npm run smoke:artifact
@@ -40,7 +41,9 @@ kbx ingest
 kbx ingest docs --include "**/*.md" --exclude "drafts/**" --no-gitignore
 kbx search "workspace registry"
 kbx search "workspace registry" --fresh
+kbx search "workspace registry" --global
 kbx watch
+kbx doctor --repair
 kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
 kbx memory list
 kbx memory prune
@@ -109,6 +112,7 @@ printf '{"paths":["src/app.ts"]}' | kbx hook files refresh
 Tools exposed:
 
 - `kbx_search`
+- `kbx_search_global`
 - `kbx_search_many`
 - `kbx_list_sources`
 - `kbx_get_chunk`
@@ -125,16 +129,19 @@ Tools exposed:
 Search uses deterministic hybrid retrieval by default. Optional model or LLM reranking can be layered in with an external command:
 
 ```bash
+kbx search "session timeout" --reranker local
 kbx search "session timeout" --reranker command --reranker-command "node rerank.mjs"
 ```
 
-The reranker command reads one JSON object from stdin (`query` plus `candidates`) and writes either `{ "scores": { "<chunk-id>": 0.9 } }` or an array of `{ "id", "score" }`.
+`local` uses kbx's built-in deterministic source, phrase, proximity, and match-type reranking. The `command` mode reads one JSON object from stdin (`query` plus `candidates`) and writes either `{ "scores": { "<chunk-id>": 0.9 } }` or an array of `{ "id", "score" }`.
 
 Retrieval quality can be measured before and after reranker changes with a JSON eval corpus:
 
 ```bash
 kbx eval retrieval evals/retrieval.json -k 5
 ```
+
+A tiny example corpus lives under `examples/retrieval-eval/`.
 
 ## Release Artifacts
 
@@ -152,12 +159,14 @@ See [docs/agent-usage.md](docs/agent-usage.md) for Claude/Codex/Cursor style usa
 
 ## Current Scope
 
-This is pre-release alpha scope. The CLI is usable for local development and smoke testing, but the first public npm release, standalone binaries, and broader distribution hardening are still pending.
+This is pre-release alpha scope. The CLI is usable for local development, smoke testing, release preflight checks, and standalone Node-runtime platform archives.
 
 Implemented:
 
 - workspace init, registry list/forget/delete
 - ingest/search/stats/reset/doctor/config
+- global search across registered workspaces with `kbx search --global`
+- doctor repair flow with `kbx doctor --repair`
 - explicit search freshness with `kbx search --fresh`
 - hot indexing with `kbx ingest --watch` or `kbx watch`
 - source list/remove
@@ -169,6 +178,7 @@ Implemented:
 - Zvec-backed local vector collection
 - hybrid vector and SQLite FTS5 lexical retrieval
 - deterministic retrieval enhancers with post-fusion reranking and query-centered snippets
+- built-in local reranker mode plus optional external command reranker
 - Transformers.js embeddings with a hash test embedder
 - model catalog list/use/benchmark, benchmark cache, installed status, and offline load from a local model directory
 - init-time model selection with `--model`, `--choose-model`, git-root prompts, and user-level root preference
@@ -180,8 +190,10 @@ Implemented:
 - Claude Code hook adapter for refreshing kbx after Write/Edit/MultiEdit
 - CI and npm release workflow with package dry-run validation
 - release artifact checksums, install smoke test, standalone Node-runtime platform archive packaging, artifact smoke tests, provenance attestations, optional signing hook, and Homebrew formula generation
+- conservative default secret/key/env-file exclusions during ingest
+- example retrieval eval corpus
 
-Not yet implemented:
+Non-goals:
 
-- single-file SEA injection; current release archives are standalone because they include the Node runtime and dependency tree
-- answer generation or chat
+- answer generation or chat; kbx stays a retrieval layer
+- Node SEA-style single-file binaries while native addon dependencies require external runtime assets; standalone platform archives are the supported no-system-Node distribution path

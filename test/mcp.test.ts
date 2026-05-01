@@ -39,6 +39,7 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
     "kbx_remove_source",
     "kbx_reset_index",
     "kbx_search",
+    "kbx_search_global",
     "kbx_search_many",
     "kbx_watch_status"
   ].sort());

@@ -21,7 +21,7 @@ import {
   resetWorkspaceIndex,
   scanWorkspaceFreshness
 } from "./indexer";
-import { searchWorkspace } from "./search";
+import { searchRegisteredWorkspaces, searchWorkspace } from "./search";
 import { ChunkVectorStore } from "./vector-store";
 import { KBX_VERSION } from "./version";
 
@@ -114,6 +114,41 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         freshness,
         searches,
         next: "Call kbx_get_chunk for any result you plan to quote or rely on."
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_search_global",
+    {
+      description: "Search across all registered local kbx workspaces. Returns workspace-qualified previews and chunk IDs.",
+      inputSchema: {
+        query: z.string().min(1).describe("Search query"),
+        top_k: z.number().int().min(1).max(50).optional().describe("Number of chunks to return"),
+        preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
+        include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer kbx_get_chunk in the owning workspace unless full text is explicitly needed.")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ query, top_k, preview_chars, include_text }) => {
+      const hits = await searchRegisteredWorkspaces(query, top_k ?? 5);
+      return textResult(JSON.stringify({
+        query,
+        results: hits.map((hit) => ({
+          id: hit.id,
+          workspace: hit.workspace,
+          source: hit.citation_source,
+          local_source: hit.local_source,
+          chunk_idx: hit.chunk_idx,
+          score: hit.score,
+          match: hit.match,
+          preview: previewForHit(hit, preview_chars ?? DEFAULT_SEARCH_PREVIEW_CHARS),
+          ...(include_text === true ? { text: hit.text } : {})
+        })),
+        next: "Use the workspace path and local_source to inspect or refresh the owning workspace."
       }, null, 2));
     }
   );

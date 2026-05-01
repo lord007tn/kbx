@@ -31,7 +31,7 @@ See `docs/implementation-status.md` for the current shipped foundation.
 
 ## 2. Problem
 
-Existing local RAG setups require Python, Docker, Ollama, or a vector database server. None are realistic for a non-developer who just wants their notes searchable by an AI. Cloud-hosted alternatives (Pinecone, Qdrant Cloud, OpenAI embeddings) require API keys, send data off-device, and cost money at scale. There is no "SQLite for AI knowledge" — a zero-config, single-binary, fully local tool — for the Node.js ecosystem.
+Existing local RAG setups require Python, Docker, Ollama, or a vector database server. None are realistic for a non-developer who just wants their notes searchable by an AI. Cloud-hosted alternatives (Pinecone, Qdrant Cloud, OpenAI embeddings) require API keys, send data off-device, and cost money at scale. There is no "SQLite for AI knowledge" — a zero-config, local-first retrieval tool with standalone platform archives — for the Node.js ecosystem.
 
 ## 3. Goals
 
@@ -160,7 +160,7 @@ Platform adapters first generate config and guidance. Hook-based agent adapters 
 | Logging | `pino` (silent by default) | Structured logs to file, never stdout unless `--verbose`. |
 | Tests | Node built-in test runner + `tsx` | No Jest. Keep deps minimal. |
 | Build | `tsup` | Single-file ESM bundle. |
-| Distribution | npm package; later: Node SEA single-binary | npm covers v1; SEA in v1.1 for non-Node users. |
+| Distribution | npm package plus standalone Node-runtime platform archives | npm covers Node users; archives cover users without system Node. |
 
 ### 7.2 Platform support
 
@@ -177,7 +177,7 @@ v1 platform support follows the published `@zvec/zvec` native bindings:
 
 ### 7.3 Core and agent boundary
 
-`kbx search` returns relevant chunks and human-readable source metadata. MCP tools return privacy-preserving citation metadata. Neither surface synthesizes answers. The `ask` command name is reserved for a later integration with tools like Codex CLI or Claude CLI, where a user's existing AI subscription can generate answers from retrieved local context.
+`kbx search` returns relevant chunks and human-readable source metadata. MCP tools return privacy-preserving citation metadata. Neither surface synthesizes answers. Answer generation and chat commands are permanent non-goals; kbx stays a retrieval layer for tools like Codex CLI and Claude.
 
 The agent helper layer may refresh, search, cite, manage sources, and provide platform guidance, but it does not turn `kbx` into a general command sandbox. Sandboxed execution is explicitly out of scope for this roadmap.
 
@@ -247,7 +247,7 @@ Switching models requires a rebuild because vectors are not interchangeable acro
 
 ### 7.8 Workspace scoping
 
-v1 scopes each knowledge base to the initialized workspace where `kbx` is run. An initialized workspace is marked by a `.kbx/` directory. Running `kbx` from `/work/project-a` or one of its subdirectories searches and serves `/work/project-a/.kbx/`; running it from `/work/project-b` searches and serves `/work/project-b/.kbx/`. `kbx ingest` adds or updates sources inside the current workspace knowledge base, not a user-global corpus. When no path is provided, it ingests the current initialized workspace root. Passing a path narrows ingest to that file or folder inside the same workspace knowledge base.
+v1 scopes each knowledge base to the initialized workspace where `kbx` is run. An initialized workspace is marked by a `.kbx/` directory. Running `kbx` from `/work/project-a` or one of its subdirectories searches and serves `/work/project-a/.kbx/`; running it from `/work/project-b` searches and serves `/work/project-b/.kbx/`. `kbx ingest` adds or updates sources inside the current workspace knowledge base, not a user-global corpus. When no path is provided, it ingests the current initialized workspace root. Passing a path narrows ingest to that file or folder inside the same workspace knowledge base. `kbx search --global` is a discovery convenience that fans out to registered workspace knowledge bases and merges results without creating a merged global index.
 
 By default, `kbx ingest [path]` only accepts paths inside the current initialized workspace. If a user passes an external path, they must opt in with `--allow-external`. External ingest snapshots the selected files into `.kbx/imports/` first, then indexes the copied files from inside the workspace; `kbx` does not index external paths in place.
 
@@ -267,7 +267,7 @@ kbx init <path>
 
 If the initialized workspace is a git repository, `kbx init` adds `.kbx/` to `.gitignore` when it is not already ignored.
 
-`kbx` also maintains a user-level workspace registry so known workspaces can be listed and forgotten from outside their directory. The registry stores workspace locations and metadata, not a merged global index. A later global search mode can query registered workspace knowledge bases in parallel.
+`kbx` also maintains a user-level workspace registry so known workspaces can be listed and forgotten from outside their directory. The registry stores workspace locations and metadata, not a merged global index. Global search queries registered workspace knowledge bases in parallel-style fanout and returns workspace-qualified citations.
 
 Multiple named collections inside one workspace are out of scope for v1.
 
@@ -605,13 +605,14 @@ Initial adapter coverage targets Claude Desktop, Claude Code, Codex, Cursor, Gem
 - Initial hook adapter spike for one stable host. **Implemented for Claude Code file-edit freshness refresh.**
 
 ### v0.6 — Polish
-- `kbx doctor --bench`
+  - `kbx doctor --bench`
+  - `kbx doctor --repair`
 - Plain text, source code, PDF, and DOCX ingest
 - Improved CLI output (colors, progress bars done right)
 - Docs site
 
 ### v1.0 — Distribution
-- Single-binary builds (Node SEA) for users without Node installed
+  - Standalone platform archives with bundled Node runtime for users without Node installed
 - Homebrew formula
 - Signed releases on GitHub
 
@@ -632,11 +633,11 @@ Initial adapter coverage targets Claude Desktop, Claude Code, Codex, Cursor, Gem
 
 ## 11. Deferred questions
 
-1. **How should `kbx ask` integrate with external AI CLIs?** v1 does not ship answer generation. Reserve `kbx ask` for a later integration with tools like Codex CLI or Claude CLI using the user's existing local subscription. If direct local generation is needed later, plug into Ollama via HTTP as an optional integration.
+1. **Should kbx generate answers?** No. Answer generation and chat are permanent non-goals. kbx retrieves local chunks, citations, and freshness metadata; the user's AI assistant decides how to use them.
 2. **When should LLM reranking be added?** LLM reranking is out of the default pipeline. Revisit after hybrid retrieval quality and latency are measured on real workspaces.
-3. **Global search across workspaces?** v1 scopes search to the current workspace. Later, `kbx search --global` or a dedicated global command can fan out across the workspace registry and query multiple workspace knowledge bases in parallel.
+3. **Global search across workspaces?** Implemented as `kbx search --global`, which fans out across the workspace registry without building a merged global index.
 4. **Additional document formats beyond PDF, DOCX, PPTX, XLSX, and EPUB?** Measure demand before adding heavier extractors such as image/OCR pipelines.
-5. **Single binary via `bun build --compile`?** Possibly faster route than Node SEA. Test in v0.4.
+5. **Single binary via Node SEA or `bun build --compile`?** Not the supported path while native addons are required. Use standalone platform archives with bundled Node runtime and native dependency tree.
 6. **Session memory retention defaults?** Session memory now requires explicit per-entry retention. Default retention remains intentionally unset.
 
 ## 12. Success metrics (post-launch)

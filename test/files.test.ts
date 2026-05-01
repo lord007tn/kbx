@@ -22,6 +22,10 @@ test("listIndexableFiles includes text/code files and excludes built artifacts",
     await writeFile(path.join(root, "packages", "site", "node_modules", "dep", "index.ts"), "export const dep = true;\n", "utf8");
     await writeFile(path.join(root, "packages", "site", "dist", "bundle.js"), "generated();\n", "utf8");
     await writeFile(path.join(root, "package-lock.json"), "{}\n", "utf8");
+    await writeFile(path.join(root, ".env"), "TOKEN=secret\n", "utf8");
+    await writeFile(path.join(root, ".env.local"), "TOKEN=secret\n", "utf8");
+    await writeFile(path.join(root, "private.key"), "secret\n", "utf8");
+    await writeFile(path.join(root, "id_ed25519"), "secret\n", "utf8");
     await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
     await writeFile(path.join(root, "src", "Cargo.lock"), "# lock\n", "utf8");
     await writeFile(path.join(root, ".agents", "skills", "README.md"), "# Agent Skill\n", "utf8");

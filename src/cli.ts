@@ -7,10 +7,10 @@ import { KBX_AGENT_GUIDE } from "./agent-guide";
 import { getConfigValue, getUserConfigValue, listConfigValues, listUserConfigValues, setConfigValue, setUserConfigValue } from "./config";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
-import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, removeSource, resetWorkspaceIndex, resolveSourceEntry, type IngestProgressEvent, type IngestResult } from "./indexer";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, refreshWorkspaceIndex, removeSource, resetWorkspaceIndex, resolveSourceEntry, type IngestProgressEvent, type IngestResult } from "./indexer";
 import { runMcpServer } from "./mcp";
 import { cachedModelBenchmark, formatBenchmarkSpeed, isCatalogModelInstalled, loadCatalogModelFromPath, MODEL_CATALOG, modelDetails, resolveModel, type ModelCatalogEntry } from "./models";
-import { searchWorkspace } from "./search";
+import { searchRegisteredWorkspaces, searchWorkspace } from "./search";
 import { evaluateRetrieval, parseRetrievalEvalCorpus } from "./retrieval-eval";
 import { addSessionMemory, listSessionMemories, pruneExpiredSessionMemories, sessionMemorySource } from "./session-memory";
 import { KBX_VERSION } from "./version";
@@ -150,7 +150,8 @@ program
   .argument("<query>", "search query")
   .option("-k, --top-k <number>", "number of chunks to return", parsePositiveInteger, 5)
   .option("--fresh", "refresh changed, deleted, or new source files before searching")
-  .option("--reranker <mode>", "optional reranker mode: none or command", "none")
+  .option("--global", "search across all registered workspaces")
+  .option("--reranker <mode>", "optional reranker mode: none, local, or command", "none")
   .option("--reranker-command <command>", "external reranker command that reads JSON from stdin and writes scores JSON")
   .addHelpText("after", `
 
@@ -158,12 +159,33 @@ Examples:
   $ kbx search "deployment notes"
   $ kbx search "workspace registry" -k 10
   $ kbx search "new ADR" --fresh
+  $ kbx search "session timeout" --global
   $ kbx search "auth timeout" --reranker command --reranker-command "node rerank.mjs"
 
 Search reads the existing index by default. Use --fresh to refresh sources before querying.
 Model or LLM reranking is optional and off by default.
 `)
-  .action(async (query: string, options: { topK: number; fresh?: boolean; reranker: "none" | "command"; rerankerCommand?: string }) => {
+  .action(async (query: string, options: { topK: number; fresh?: boolean; global?: boolean; reranker: "none" | "local" | "command"; rerankerCommand?: string }) => {
+    if (options.global === true) {
+      const hits = await searchRegisteredWorkspaces(query, options.topK, {
+        reranker: {
+          mode: options.reranker,
+          command: options.rerankerCommand
+        }
+      });
+      if (hits.length === 0) {
+        console.log("No results.");
+        return;
+      }
+
+      for (const [index, hit] of hits.entries()) {
+        console.log(`${index + 1}. [${hit.workspace.name}] ${hit.local_source}#${hit.chunk_idx} (${hit.score.toFixed(3)})`);
+        console.log(indent(excerpt(hit.snippet ?? hit.text)));
+        console.log("");
+      }
+      return;
+    }
+
     const workspace = await findWorkspace(process.cwd());
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
@@ -679,17 +701,26 @@ program
   .option("--fresh", "scan source files for stale/deleted/new files")
   .option("--bench", "run a small local embedding benchmark")
   .option("--deep", "include freshness scan and benchmark")
+  .option("--repair", "refresh configured sources before diagnostics to repair freshness or lexical drift")
   .addHelpText("after", `
 
 Examples:
   $ kbx doctor
   $ kbx doctor --fresh
+  $ kbx doctor --repair
   $ kbx doctor --deep
 `)
-  .action(async (options: { fresh?: boolean; bench?: boolean; deep?: boolean }) => {
+  .action(async (options: { fresh?: boolean; bench?: boolean; deep?: boolean; repair?: boolean }) => {
     const workspace = await findWorkspace(process.cwd());
+    if (options.repair === true) {
+      if (!workspace) {
+        throw new Error("No kbx workspace found. Run kbx init first.");
+      }
+      const repair = await refreshWorkspaceIndex(workspace);
+      console.log(`repair  refreshed ${repair.files} file(s), ${repair.chunks} new chunk(s), ${repair.skipped} unchanged, ${repair.deleted} deleted across ${repair.sources} source(s).`);
+    }
     const lines = await runDoctor(workspace, {
-      fresh: options.fresh === true || options.deep === true,
+      fresh: options.fresh === true || options.deep === true || options.repair === true,
       bench: options.bench === true || options.deep === true
     });
 
@@ -879,9 +910,9 @@ evalCommand
   .description("Evaluate search results against expected source files.")
   .argument("<corpus>", "JSON array of { id, query, relevant: [source] } cases")
   .option("-k, --top-k <number>", "number of hits to evaluate per query", parsePositiveInteger, 5)
-  .option("--reranker <mode>", "optional reranker mode: none or command", "none")
+  .option("--reranker <mode>", "optional reranker mode: none, local, or command", "none")
   .option("--reranker-command <command>", "external reranker command")
-  .action(async (corpusPath: string, options: { topK: number; reranker: "none" | "command"; rerankerCommand?: string }) => {
+  .action(async (corpusPath: string, options: { topK: number; reranker: "none" | "local" | "command"; rerankerCommand?: string }) => {
     const workspace = await requireWorkspace();
     const cases = parseRetrievalEvalCorpus(await readFile(path.resolve(corpusPath), "utf8"));
     const resultsByCaseId = new Map<string, Awaited<ReturnType<typeof searchWorkspace>>>();

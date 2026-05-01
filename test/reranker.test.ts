@@ -58,6 +58,12 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify([{ id: "b", sc
   }
 });
 
+test("applyOptionalReranker accepts explicit local mode", async () => {
+  const hits = [hit("a"), hit("b")];
+
+  assert.deepEqual(await applyOptionalReranker("query", hits, { mode: "local" }), hits);
+});
+
 function hit(id: string): SearchHit {
   return {
     id,

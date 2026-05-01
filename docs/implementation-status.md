@@ -23,11 +23,15 @@ This document records what is already present in the current `kbx` codebase so t
 - Hybrid baseline search that combines vector results with SQLite lexical/BM25 matches.
 - Deterministic retrieval enhancers: exact phrase/source boosts, proximity scoring, post-fusion reranking, and query-centered snippets.
 - Optional external command reranker contract for model-based or LLM reranking experiments; disabled by default.
+- Built-in local reranker mode for deterministic phrase, source, proximity, and match-type ordering.
 - Retrieval quality eval command with MRR, hit rate, and recall@k over a JSON corpus.
+- Example retrieval eval corpus under `examples/retrieval-eval/`.
+- Global search across registered workspaces via `kbx search --global`.
 - Workspace stats, freshness reporting, explicit search freshness, reset, doctor checks, lexical/vector consistency checks, and benchmark options.
+- Doctor repair flow via `kbx doctor --repair`.
 - Watch ingest mode using current workspace/source boundaries via `kbx ingest --watch` and `kbx watch`.
 - Session memory commands: `kbx memory add`, `kbx memory list`, and `kbx memory prune`.
-- Stdio MCP server with read tools: `kbx_search`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, and `kbx_agent_guide`.
+- Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, and `kbx_agent_guide`.
 - MCP maintenance tools: `kbx_refresh_index`, `kbx_refresh_file`, `kbx_watch_status`, and `kbx_mcp_config`.
 - MCP search opportunistically refreshes stale indexed content when the detected change count is within the bounded MCP refresh budget.
 - Gated destructive MCP tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, and `kbx_delete_workspace_kb`.
@@ -39,16 +43,18 @@ This document records what is already present in the current `kbx` codebase so t
 - MCP adapter config template validation in `doctor`.
 - Test coverage for adapters, chunking, config, files, indexing, MCP tools, source handling, model catalog, search, vector store, and workspace behavior.
 - CI and npm release workflow with package dry-run validation, install smoke tests, standalone Node-runtime platform archive artifacts, artifact smoke tests, checksums, checksum verification, GitHub artifact attestations, optional signing hook, generated Homebrew formula, and npm provenance publishing.
+- Release preflight script that runs typecheck, tests, build, and install smoke checks.
+- Conservative default ingest exclusions for env files, common private keys/certificates, password databases, and `secrets/` directories.
 
 ## Verified Locally
 
 - `npm run typecheck` passes.
-- `npm test` passes with 94 tests.
+- `npm test` passes with the current test suite.
 - `npm run build` passes.
 
 ## Known Gaps
 
-- Single-file SEA-injected binaries remain future work; current platform archives are standalone because they include their own Node runtime and dependency tree.
 - First-class hook adapter coverage beyond Claude Code still depends on which clients expose stable post-edit lifecycle hooks.
-- The optional reranker contract exists, but no built-in cross-encoder or LLM reranker model is bundled.
-- Answer generation and chat are intentionally out of scope while kbx remains a retrieval layer for tools such as Codex and Claude.
+- Cross-encoder or LLM reranking can be integrated through the command reranker contract, but kbx does not bundle a heavy model.
+- Node SEA-style single-file binaries are not the supported path while kbx depends on native addons (`better-sqlite3` and `@zvec/zvec`); standalone Node-runtime archives are the supported distribution artifact for users without system Node.
+- Answer generation and chat are permanent non-goals; kbx remains a retrieval layer for tools such as Codex and Claude.
