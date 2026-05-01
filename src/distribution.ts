@@ -18,6 +18,8 @@ export interface HomebrewFormulaOptions {
   artifact: ReleaseArtifact;
 }
 
+export type RuntimeArchiveFormat = "tar" | "zip";
+
 export function sha256Hex(input: Buffer | string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
@@ -50,6 +52,42 @@ export function parseChecksumsText(value: string): ReleaseArtifact[] {
     });
 }
 
+export function archiveRootName(name: string): string {
+  if (name.endsWith(".tar.gz")) {
+    return name.slice(0, -".tar.gz".length);
+  }
+  if (name.endsWith(".tgz")) {
+    return name.slice(0, -".tgz".length);
+  }
+  return name.replace(/\.[^.]+$/, "");
+}
+
+export function runtimeArchiveFormat(name: string): RuntimeArchiveFormat | undefined {
+  if (name.endsWith(".zip")) {
+    return "zip";
+  }
+  if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) {
+    return "tar";
+  }
+  return undefined;
+}
+
+export function requiredRuntimeArchiveEntries(name: string): string[] {
+  const root = archiveRootName(name);
+  const launcher = name.endsWith(".zip") ? `${root}/bin/kbx.cmd` : `${root}/bin/kbx`;
+  return [
+    `${root}/package.json`,
+    `${root}/dist/cli.mjs`,
+    `${root}/node_modules/`,
+    `${root}/support/node/`,
+    launcher
+  ];
+}
+
+export function missingRuntimeArchiveEntries(name: string, entries: string[]): string[] {
+  return requiredRuntimeArchiveEntries(name).filter((entry) => !hasArchiveEntry(entries, entry));
+}
+
 export function generateHomebrewFormula(options: HomebrewFormulaOptions): string {
   const className = options.className ?? "Kbx";
   const packageName = options.packageName ?? "kbx";
@@ -76,4 +114,10 @@ end
 
 function escapeRuby(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"");
+}
+
+function hasArchiveEntry(entries: string[], required: string): boolean {
+  return required.endsWith("/")
+    ? entries.some((entry) => entry === required || entry.startsWith(required))
+    : entries.includes(required);
 }
