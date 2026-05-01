@@ -42,7 +42,7 @@
     "smoke:pack": "node scripts/verify-npm-pack.mjs",
     "dev": "tsx src/cli.ts",
     "example:hf-markdown": "node examples/hf-open-markdown/fetch-open-markdown.mjs",
-    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
