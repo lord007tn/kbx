@@ -42,7 +42,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Generic `kbx hook files refresh` handler for clients that expose stable post-edit hooks but do not yet have a first-class adapter.
 - MCP adapter config template validation in `doctor`.
 - Test coverage for adapters, chunking, config, files, indexing, MCP tools, source handling, model catalog, search, vector store, and workspace behavior.
-- CI and npm release workflow with enforced npm package content validation, install smoke tests, npm provenance publishing, and generated-notes GitHub releases.
+- CI and npm release workflow with enforced npm package content validation, install smoke tests, npm provenance publishing, and `changelogithub` GitHub releases.
 - Release preflight script that runs typecheck, tests, build, and install smoke checks.
 - Conservative default ingest exclusions for env files, common private keys/certificates, password databases, and `secrets/` directories.
 

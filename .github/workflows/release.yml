@@ -101,8 +101,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
+        run: npx -y changelogithub@14.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

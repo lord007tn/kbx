@@ -148,7 +148,7 @@ A tiny example corpus lives under `examples/retrieval-eval/`.
 
 ## npm Release
 
-`kbx` is distributed as an npm CLI and is intended to run directly through `npx -y kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with provenance, and creates a generated-notes GitHub release for the tag.
+`kbx` is distributed as an npm CLI and is intended to run directly through `npx -y kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with provenance, and creates a Conventional Commits changelog release with `changelogithub`.
 
 Destructive MCP tools are disabled by default. Enable them only when you want agents to perform delete/reset operations:
 
