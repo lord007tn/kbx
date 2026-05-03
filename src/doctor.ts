@@ -1,9 +1,8 @@
 import { performance } from "node:perf_hooks";
 import { generateAllAdapterHooks, validateAllAdapterConfigs } from "./adapters";
 import { createEmbedder } from "./embedding";
-import { listIndexableFileEntries } from "./files";
 import { directorySizeBytes, formatBytes } from "./io";
-import { loadIndexStats } from "./indexer";
+import { loadIndexStats, scanWorkspaceFreshness } from "./indexer";
 import { LexicalIndexStore } from "./lexical-index";
 import { cachedModelBenchmark, saveModelBenchmarkResult } from "./models";
 import type { IndexStats } from "./types";
@@ -143,37 +142,8 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
 }
 
 export async function freshnessLine(workspace: Workspace, stats: IndexStats): Promise<DoctorLine> {
-  const sources = await loadSources(workspace);
-  const currentFiles = new Map<string, number>();
-  for (const source of sources) {
-    for (const file of await listIndexableFileEntries(workspace.root, source.path, {
-      includeKbxImports: source.kind === "external_import",
-      includeKbxSessions: source.kind === "session_memory",
-      include: source.include,
-      exclude: source.exclude,
-      useGitignore: source.no_gitignore === true ? false : true
-    })) {
-      currentFiles.set(file.relativePath, file.mtime);
-    }
-  }
-
-  let stale = 0;
-  let deleted = 0;
-  for (const [filePath, indexed] of Object.entries(stats.files)) {
-    const currentMtime = currentFiles.get(filePath);
-    if (currentMtime === undefined) {
-      deleted += 1;
-    } else if (currentMtime !== indexed.mtime) {
-      stale += 1;
-    }
-  }
-
-  let newFiles = 0;
-  for (const filePath of currentFiles.keys()) {
-    if (!stats.files[filePath]) {
-      newFiles += 1;
-    }
-  }
+  void stats;
+  const { stale, deleted, newFiles } = await scanWorkspaceFreshness(workspace);
 
   const ok = stale === 0 && deleted === 0 && newFiles === 0;
   return {

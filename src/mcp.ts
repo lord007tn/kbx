@@ -65,6 +65,7 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         chunk_idx: hit.chunk_idx,
         score: hit.score,
         match: hit.match,
+        ...(hit.branch_name ? { branch: hit.branch_name } : {}),
         preview: previewForHit(hit, preview_chars ?? DEFAULT_SEARCH_PREVIEW_CHARS),
         ...(include_text === true ? { text: hit.text } : {})
       }));
@@ -105,6 +106,7 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
             chunk_idx: hit.chunk_idx,
             score: hit.score,
             match: hit.match,
+            ...(hit.branch_name ? { branch: hit.branch_name } : {}),
             preview: previewForHit(hit, preview_chars ?? DEFAULT_SEARCH_PREVIEW_CHARS),
             ...(include_text === true ? { text: hit.text } : {})
           }))

@@ -87,6 +87,11 @@ export interface EmbeddedChunkRecord extends ChunkRecord {
 export interface IndexedFileStats {
   mtime: number;
   chunks: number;
+  relative_path?: string;
+  branch_scope?: string;
+  branch_name?: string;
+  git_head?: string;
+  content_hash?: string;
 }
 
 export interface IndexStats {
@@ -106,6 +111,10 @@ export interface SearchHit {
   text: string;
   snippet?: string;
   match: "vector" | "lexical" | "hybrid";
+  branch_scope?: string;
+  branch_name?: string;
+  git_head?: string;
+  content_hash?: string;
 }
 
 export interface ChunkDetail {

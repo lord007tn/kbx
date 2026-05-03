@@ -1,4 +1,6 @@
 import { chunkMarkdown, chunkSentences, chunkText } from "./chunk";
+import { branchContextForSource, indexedRelativePath, isIndexedInBranch, sourceKeyForPath, type BranchContext } from "./branch";
+import { encodeChunkTags } from "./chunk-tags";
 import { extractIndexableText, isDocumentExtension } from "./document-text";
 import { createEmbedder } from "./embedding";
 import { listIndexableFileEntries } from "./files";
@@ -9,6 +11,7 @@ import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources
 import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry, type WorkspaceManifest } from "./types";
 import { ChunkVectorStore } from "./vector-store";
 import { access, mkdir, rename, rm } from "node:fs/promises";
+import crypto from "node:crypto";
 import path from "node:path";
 
 const EMBED_BATCH_SIZE = 64;
@@ -77,6 +80,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
   ]);
 
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+  const branch = await branchContextForSource(workspace, source);
   await options.onProgress?.({ phase: "scan-start", source: source.path });
   const files = await listIndexableFileEntries(workspace.root, source.path, {
     includeKbxImports: source.kind === "external_import",
@@ -86,7 +90,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
     useGitignore: source.no_gitignore === true ? false : true
   });
   await options.onProgress?.({ phase: "scan-complete", source: source.path, totalFiles: files.length });
-  const currentFilePaths = new Set(files.map((file) => file.relativePath));
+  const currentFilePaths = new Set(files.map((file) => sourceKeyForPath(file.relativePath, branch)));
   const embedder = createEmbedder(manifest.model, manifest.dim);
   const store = await ChunkVectorStore.open(workspace, manifest.dim);
   const lexical = await LexicalIndexStore.open(workspace);
@@ -111,11 +115,16 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
   };
 
   try {
-    for (const filePath of Object.keys(stats.files)) {
-      if (sourceIncludesFile(source, filePath) && !currentFilePaths.has(filePath)) {
-        store.deleteSource(filePath);
-        lexical.deleteSource(filePath);
-        delete stats.files[filePath];
+    for (const [fileKey, indexed] of Object.entries(stats.files)) {
+      const relativePath = indexedRelativePath(fileKey, indexed);
+      if (
+        sourceIncludesFile(source, relativePath)
+        && isIndexedInBranch(indexed, branch?.scope)
+        && !currentFilePaths.has(fileKey)
+      ) {
+        store.deleteSource(fileKey);
+        lexical.deleteSource(fileKey);
+        delete stats.files[fileKey];
         deleted += 1;
         await options.onProgress?.({
           phase: "delete",
@@ -127,14 +136,15 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
     }
 
     for (const [index, file] of files.entries()) {
-      const existingFile = stats.files[file.relativePath];
+      const fileKey = sourceKeyForPath(file.relativePath, branch);
+      const existingFile = stats.files[fileKey];
       if (existingFile && existingFile.mtime === file.mtime) {
         if (
           lexicalRepairNeeded
           && sourceIncludesFile(source, file.relativePath)
-          && lexical.sourceChunkCount(file.relativePath) !== existingFile.chunks
+          && lexical.sourceChunkCount(fileKey) !== existingFile.chunks
         ) {
-          const storedChunks = store.listSourceChunks(file.relativePath, existingFile.chunks);
+          const storedChunks = store.listSourceChunks(fileKey, existingFile.chunks);
           if (storedChunks.length === existingFile.chunks) {
             await queueLexicalRepair(storedChunks);
           } else {
@@ -145,9 +155,9 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
               if (!isMissingFileError(error)) {
                 throw error;
               }
-              store.deleteSource(file.relativePath);
-              lexical.deleteSource(file.relativePath);
-              delete stats.files[file.relativePath];
+              store.deleteSource(fileKey);
+              lexical.deleteSource(fileKey);
+              delete stats.files[fileKey];
               deleted += 1;
               await options.onProgress?.({
                 phase: "file",
@@ -161,7 +171,8 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
               });
               continue;
             }
-            await queueLexicalRepair(chunksForFile(source, file.relativePath, file.extension, file.mtime, content, config));
+            const contentHash = hashContent(content);
+            await queueLexicalRepair(chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, contentHash, config, branch));
           }
         }
         skipped += 1;
@@ -178,8 +189,8 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
         continue;
       }
 
-      store.deleteSource(file.relativePath);
-      lexical.deleteSource(file.relativePath);
+      store.deleteSource(fileKey);
+      lexical.deleteSource(fileKey);
       let content: string;
       try {
         content = await extractIndexableText(file.absolutePath, file.extension);
@@ -187,8 +198,8 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
         if (!isMissingFileError(error)) {
           throw error;
         }
-        delete stats.files[file.relativePath];
-        lexical.deleteSource(file.relativePath);
+        delete stats.files[fileKey];
+        lexical.deleteSource(fileKey);
         deleted += 1;
         await options.onProgress?.({
           phase: "file",
@@ -203,14 +214,20 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
         continue;
       }
 
-      const chunks = chunksForFile(source, file.relativePath, file.extension, file.mtime, content, config);
+      const contentHash = hashContent(content);
+      const chunks = chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, contentHash, config, branch);
 
       insertedChunks += await embedAndUpsert(store, embedder, chunks);
       lexical.upsertChunks(chunks);
 
-      stats.files[file.relativePath] = {
+      stats.files[fileKey] = {
         mtime: file.mtime,
-        chunks: chunks.length
+        chunks: chunks.length,
+        relative_path: file.relativePath,
+        branch_scope: branch?.scope,
+        branch_name: branch?.name,
+        git_head: branch?.head,
+        content_hash: contentHash
       };
       await options.onProgress?.({
         phase: "file",
@@ -259,15 +276,18 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
 function chunksForFile(
   source: SourceEntry,
   relativePath: string,
+  sourceKey: string,
   extension: string,
   mtime: number,
   content: string,
-  config: Awaited<ReturnType<typeof loadConfig>>
+  contentHash: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  branch: BranchContext | null
 ): ChunkRecord[] {
   const isMarkdown = extension === ".md" || extension === ".mdx";
   const isDocument = isDocumentExtension(extension);
   const chunkInput = {
-    source: relativePath,
+    source: sourceKey,
     content,
     maxChars: config.chunk.size,
     overlapChars: config.chunk.overlap,
@@ -282,13 +302,18 @@ function chunksForFile(
   return textChunks.map((chunk) => ({
     id: chunk.id,
     text: chunk.text,
-    source: relativePath,
+    source: sourceKey,
     human_source: humanSource(source, relativePath),
     citation_source: citationSource(source, relativePath),
     source_origin: source.kind,
     chunk_idx: chunk.chunk_idx,
     mtime,
-    tags: ""
+    tags: encodeChunkTags({
+      branch_scope: branch?.scope,
+      branch_name: branch?.name,
+      git_head: branch?.head,
+      content_hash: contentHash
+    })
   }));
 }
 
@@ -325,8 +350,13 @@ export async function scanWorkspaceFreshness(workspace: Workspace): Promise<Fres
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
   const sources = await loadSources(workspace);
   const currentFiles = new Map<string, number>();
+  const currentBranchScopes = new Set<string>();
 
   for (const source of sources) {
+    const branch = await branchContextForSource(workspace, source);
+    if (branch) {
+      currentBranchScopes.add(branch.scope);
+    }
     const files = await listIndexableFileEntries(workspace.root, source.path, {
       includeKbxImports: source.kind === "external_import",
       includeKbxSessions: source.kind === "session_memory",
@@ -335,14 +365,17 @@ export async function scanWorkspaceFreshness(workspace: Workspace): Promise<Fres
       useGitignore: source.no_gitignore === true ? false : true
     });
     for (const file of files) {
-      currentFiles.set(file.relativePath, file.mtime);
+      currentFiles.set(sourceKeyForPath(file.relativePath, branch), file.mtime);
     }
   }
 
   let stale = 0;
   let deleted = 0;
-  for (const [filePath, indexed] of Object.entries(stats.files)) {
-    const currentMtime = currentFiles.get(filePath);
+  for (const [fileKey, indexed] of Object.entries(stats.files)) {
+    if (indexed.branch_scope && !currentBranchScopes.has(indexed.branch_scope)) {
+      continue;
+    }
+    const currentMtime = currentFiles.get(fileKey);
     if (currentMtime === undefined) {
       deleted += 1;
     } else if (currentMtime !== indexed.mtime) {
@@ -540,11 +573,11 @@ export async function removeSource(
   let removedFiles = 0;
 
   try {
-    for (const filePath of Object.keys(stats.files)) {
-      if (sourceIncludesFile(source, filePath)) {
-        store.deleteSource(filePath);
-        lexical.deleteSource(filePath);
-        delete stats.files[filePath];
+    for (const [fileKey, indexed] of Object.entries(stats.files)) {
+      if (sourceIncludesFile(source, indexedRelativePath(fileKey, indexed))) {
+        store.deleteSource(fileKey);
+        lexical.deleteSource(fileKey);
+        delete stats.files[fileKey];
         removedFiles += 1;
       }
     }
@@ -658,6 +691,10 @@ function emptyStats(manifest: WorkspaceManifest): IndexStats {
     last_ingest_at: new Date().toISOString(),
     files: {}
   };
+}
+
+function hashContent(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
 }
 
 function importSnapshotRoot(workspace: Workspace, source: SourceEntry): string {

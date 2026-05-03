@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { ChunkRecord, SearchHit } from "./types";
 import { readJson } from "./io";
+import { parseChunkTags } from "./chunk-tags";
 import { lexicalEnhancementScore, queryTerms, snippetForQuery } from "./retrieval";
 import type { Workspace } from "./workspace";
 
@@ -20,7 +21,7 @@ interface ChunkRow {
   source: string;
   human_source: string;
   citation_source: string;
-  source_origin: "workspace" | "external_import";
+  source_origin: "workspace" | "external_import" | "session_memory";
   chunk_idx: number;
   mtime: number;
   tags: string;
@@ -138,16 +139,7 @@ export class LexicalIndexStore {
       .filter((candidate) => candidate.score > 0)
       .sort((a, b) => b.score - a.score || a.chunk.source.localeCompare(b.chunk.source) || a.chunk.chunk_idx - b.chunk.chunk_idx)
       .slice(0, topK)
-      .map(({ chunk, score }) => ({
-        id: chunk.id,
-        source: chunk.human_source,
-        citation_source: chunk.citation_source,
-        chunk_idx: chunk.chunk_idx,
-        score: Math.min(1, score),
-        text: chunk.text,
-        snippet: snippetForQuery(chunk.text, query, 360),
-        match: "lexical"
-      }));
+      .map(({ chunk, score }) => toSearchHit(chunk, score, query));
   }
 
   async close(): Promise<void> {
@@ -375,6 +367,24 @@ export class LexicalIndexStore {
       throw new Error("Cannot mutate read-only lexical index.");
     }
   }
+}
+
+function toSearchHit(chunk: ChunkRecord, score: number, query: string): SearchHit {
+  const tags = parseChunkTags(chunk.tags);
+  return {
+    id: chunk.id,
+    source: chunk.human_source,
+    citation_source: chunk.citation_source,
+    chunk_idx: chunk.chunk_idx,
+    score: Math.min(1, score),
+    text: chunk.text,
+    snippet: snippetForQuery(chunk.text, query, 360),
+    match: "lexical",
+    branch_scope: tags.branch_scope,
+    branch_name: tags.branch_name,
+    git_head: tags.git_head,
+    content_hash: tags.content_hash
+  };
 }
 
 function rowToChunk(row: ChunkRow): ChunkRecord {

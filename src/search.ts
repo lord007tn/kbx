@@ -1,4 +1,6 @@
 import { createEmbedder } from "./embedding";
+import { branchIndexExists, currentBranchContext } from "./branch";
+import { loadIndexStats } from "./indexer";
 import { LexicalIndexStore } from "./lexical-index";
 import { rerankSearchHitsWithOptionalModel } from "./retrieval";
 import type { RerankerOptions } from "./reranker";
@@ -25,6 +27,10 @@ export interface GlobalSearchHit extends SearchHit {
 
 export async function searchWorkspace(workspace: Workspace, query: string, topK: number, options: SearchWorkspaceOptions = {}): Promise<SearchHit[]> {
   const manifest = await loadManifest(workspace);
+  const branch = await currentBranchContext(workspace.root);
+  const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+  const branchScope = branch?.scope;
+  const filterToBranch = branchIndexExists(stats.files, branchScope);
   const embedder = createEmbedder(manifest.model, manifest.dim);
   const [queryEmbedding] = await embedder.embed([query]);
   if (!queryEmbedding) {
@@ -34,7 +40,7 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
   let vectorHits: SearchHit[];
   try {
-    vectorHits = store.search(queryEmbedding, Math.max(topK, topK * 2));
+    vectorHits = branchFilter(store.search(queryEmbedding, Math.max(topK * 12, 50)), branchScope, filterToBranch);
   } finally {
     store.close();
   }
@@ -42,11 +48,18 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
   let lexicalHits: SearchHit[];
   try {
-    lexicalHits = lexical.search(query, Math.max(topK, topK * 2));
+    lexicalHits = branchFilter(lexical.search(query, Math.max(topK * 12, 50)), branchScope, filterToBranch);
   } finally {
     await lexical.close();
   }
   return fuseHits(query, vectorHits, lexicalHits, topK, options);
+}
+
+function branchFilter(hits: SearchHit[], branchScope: string | undefined, enabled: boolean): SearchHit[] {
+  if (!enabled || !branchScope) {
+    return hits;
+  }
+  return hits.filter((hit) => hit.branch_scope === branchScope);
 }
 
 export async function searchRegisteredWorkspaces(

@@ -31,6 +31,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Doctor repair flow via `kbx doctor --repair`.
 - Watch ingest mode using current workspace/source boundaries via `kbx ingest --watch` and `kbx watch`.
 - Root `.kbxignore` support in addition to `.gitignore`.
+- Git branch-scoped workspace indexing with current-branch search filtering.
 - Session memory commands: `kbx memory add`, `kbx memory list`, and `kbx memory prune`.
 - Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, and `kbx_agent_guide`.
 - MCP maintenance tools: `kbx_refresh_index`, `kbx_refresh_file`, `kbx_watch_status`, and `kbx_mcp_config`.

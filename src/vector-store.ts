@@ -6,6 +6,7 @@ import zvec, {
   type ZVecStatus
 } from "@zvec/zvec";
 import { chunkId } from "./chunk";
+import { parseChunkTags } from "./chunk-tags";
 import type { ChunkDetail, ChunkRecord, EmbeddedChunkRecord, SearchHit } from "./types";
 import type { Workspace } from "./workspace";
 
@@ -92,7 +93,7 @@ export class ChunkVectorStore {
       fieldName: "embedding",
       vector,
       topk: topK,
-      outputFields: ["text", "human_source", "citation_source", "chunk_idx", "source"],
+      outputFields: ["text", "human_source", "citation_source", "chunk_idx", "source", "tags"],
       params: {
         indexType: ZVecIndexType.HNSW,
         ef: Math.max(64, topK * 8)
@@ -178,6 +179,7 @@ function initializeZvec(workspace: Workspace): void {
 }
 
 function toSearchHit(doc: ZVecDoc): SearchHit {
+  const tags = parseChunkTags(String(doc.fields.tags ?? ""));
   return {
     id: doc.id,
     source: String(doc.fields.human_source ?? ""),
@@ -185,7 +187,11 @@ function toSearchHit(doc: ZVecDoc): SearchHit {
     chunk_idx: Number(doc.fields.chunk_idx ?? 0),
     score: distanceToScore(doc.score),
     text: String(doc.fields.text ?? ""),
-    match: "vector"
+    match: "vector",
+    branch_scope: tags.branch_scope,
+    branch_name: tags.branch_name,
+    git_head: tags.git_head,
+    content_hash: tags.content_hash
   };
 }
 

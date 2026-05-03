@@ -426,6 +426,8 @@ Re-importing the same absolute source path replaces that snapshot before indexin
 
 `kbx ingest` indexes normal workspace files plus managed imports in `.kbx/imports/`. No other `.kbx/` content is indexable: config, manifests, logs, caches, and collection files are always excluded.
 
+When the workspace is inside a Git repository, workspace-file chunks are tagged with the current branch name, current HEAD, and a content hash at ingest time. Search defaults to the current branch when that branch has indexed content, which allows the same path to have different searchable content on different branches without leaking stale feature-branch results into `main`. Non-Git workspaces and managed imports keep path-scoped behavior.
+
 Search results use human-readable sources. Workspace files display their workspace-relative path. External imports display the original external path plus the imported file's relative path in local CLI output, not the internal `.kbx/imports/<hash>/...` location.
 
 MCP citations use `citation_source`, which hides absolute external paths by default. For external imports, citations use a safe label such as `external: notes/design/foo.md`; for workspace files, citations can use workspace-relative paths. Internal reindex and deletion still use the `source` field.

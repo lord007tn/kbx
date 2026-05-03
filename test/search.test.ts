@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { ingestSource } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { searchRegisteredWorkspaces, searchWorkspace } from "../src/search";
 import { SCHEMA_VERSION, type RegistryEntry, type SourceEntry, type WorkspaceManifest } from "../src/types";
 import { defaultConfig, workspaceFromRoot } from "../src/workspace";
+
+const exec = promisify(execFile);
 
 test("searchWorkspace includes lexical matches for exact symbols", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-search-"));
@@ -188,6 +192,51 @@ test("searchRegisteredWorkspaces searches every registered workspace", async () 
   }
 });
 
+test("searchWorkspace scopes indexed workspace content to the checked out Git branch", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-branch-search-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    await git(root, ["init", "-b", "main"]);
+    await git(root, ["config", "user.email", "kbx@example.test"]);
+    await git(root, ["config", "user.name", "kbx tests"]);
+
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+
+    await writeFile(path.join(root, "note.md"), "# Main\n\nmain branch unique token\n", "utf8");
+    await git(root, ["add", "note.md"]);
+    await git(root, ["commit", "-m", "main note"]);
+    await ingestSource(workspace, source);
+
+    await git(root, ["checkout", "-b", "feature"]);
+    await writeFile(path.join(root, "note.md"), "# Feature\n\nfeature branch unique token\n", "utf8");
+    await git(root, ["add", "note.md"]);
+    await git(root, ["commit", "-m", "feature note"]);
+    await ingestSource(workspace, source);
+
+    const featureHits = await searchWorkspace(workspace, "feature branch unique token", 3);
+    const featureMainHits = await searchWorkspace(workspace, "main branch unique token", 3);
+    assert.equal(featureHits[0]?.source, "note.md");
+    assert.equal(featureHits[0]?.branch_name, "feature");
+    assert.equal(featureMainHits.some((hit) => hit.text.includes("main branch unique token")), false);
+
+    await git(root, ["checkout", "main"]);
+    const mainHits = await searchWorkspace(workspace, "main branch unique token", 3);
+    const mainFeatureHits = await searchWorkspace(workspace, "feature branch unique token", 3);
+    assert.equal(mainHits[0]?.source, "note.md");
+    assert.equal(mainHits[0]?.branch_name, "main");
+    assert.equal(mainFeatureHits.some((hit) => hit.text.includes("feature branch unique token")), false);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function manifest(modelName: string, dim: number): WorkspaceManifest {
   return {
     workspace_id: "test-workspace",
@@ -216,4 +265,8 @@ function registryEntry(workspace_id: string, name: string, workspacePath: string
     created_at: "2026-05-01T00:00:00.000Z",
     last_seen_at: "2026-05-01T00:00:00.000Z"
   };
+}
+
+async function git(cwd: string, args: string[]): Promise<void> {
+  await exec("git", ["-C", cwd, ...args], { windowsHide: true });
 }
