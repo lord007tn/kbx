@@ -1,6 +1,6 @@
 {
   "name": "kbx",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Local-first knowledge base CLI for searchable AI context.",
   "license": "MIT",
   "keywords": [
@@ -21,7 +21,7 @@
   "homepage": "https://github.com/lord007tn/kbx#readme",
   "type": "module",
   "bin": {
-    "kbx": "./dist/cli.mjs"
+    "kbx": "dist/cli.mjs"
   },
   "files": [
     "dist/cli.mjs",
