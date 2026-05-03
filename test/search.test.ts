@@ -284,6 +284,194 @@ test("ingest deduplicates identical vector content across branch aliases", async
   }
 });
 
+test("ingest deduplicates identical content across different paths in one branch", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-path-dedupe-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+    await writeFile(path.join(root, "first.md"), "# Shared\n\nsame duplicate path token\n", "utf8");
+    await writeFile(path.join(root, "second.md"), "# Shared\n\nsame duplicate path token\n", "utf8");
+
+    await ingestSource(workspace, source);
+
+    const vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 1);
+      assert.equal(lexical.contentCount, 1);
+      assert.equal(lexical.chunkCount, 2);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+
+    const hits = await searchWorkspace(workspace, "same duplicate path token", 10);
+    assert.deepEqual([...new Set(hits.map((hit) => hit.source))].sort(), ["first.md", "second.md"]);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reingest removes orphan vector content when a unique file changes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-change-gc-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+    const notePath = path.join(root, "note.md");
+    await writeFile(notePath, "# Note\n\nold unique vector token\n", "utf8");
+    await ingestSource(workspace, source);
+
+    await writeFile(notePath, "# Note\n\nnew unique vector token\n", "utf8");
+    await ingestSource(workspace, source);
+
+    const oldHits = await searchWorkspace(workspace, "old unique vector token", 5);
+    const newHits = await searchWorkspace(workspace, "new unique vector token", 5);
+    const vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(oldHits.some((hit) => hit.text.includes("old unique vector token")), false);
+      assert.equal(newHits[0]?.source, "note.md");
+      assert.equal(vector.docCount, 1);
+      assert.equal(lexical.contentCount, 1);
+      assert.equal(lexical.chunkCount, 1);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reingest garbage collects vector content only after the last alias is deleted", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-delete-gc-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+    const firstPath = path.join(root, "first.md");
+    const secondPath = path.join(root, "second.md");
+    await writeFile(firstPath, "# Shared\n\nshared delete gc token\n", "utf8");
+    await writeFile(secondPath, "# Shared\n\nshared delete gc token\n", "utf8");
+    await ingestSource(workspace, source);
+
+    await rm(firstPath);
+    await ingestSource(workspace, source);
+    let vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    let lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 1);
+      assert.equal(lexical.contentCount, 1);
+      assert.equal(lexical.chunkCount, 1);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+
+    await rm(secondPath);
+    await ingestSource(workspace, source);
+    vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 0);
+      assert.equal(lexical.contentCount, 0);
+      assert.equal(lexical.chunkCount, 0);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("changing one branch alias keeps shared vector content for another branch", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-branch-shared-update-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    await git(root, ["init", "-b", "main"]);
+    await git(root, ["config", "user.email", "kbx@example.test"]);
+    await git(root, ["config", "user.name", "kbx tests"]);
+
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+
+    const notePath = path.join(root, "note.md");
+    await writeFile(notePath, "# Note\n\nshared branch update token\n", "utf8");
+    await git(root, ["add", "note.md"]);
+    await git(root, ["commit", "-m", "main shared"]);
+    await ingestSource(workspace, source);
+
+    await git(root, ["checkout", "-b", "feature"]);
+    await ingestSource(workspace, source);
+    await writeFile(notePath, "# Note\n\nfeature changed branch token\n", "utf8");
+    await git(root, ["add", "note.md"]);
+    await git(root, ["commit", "-m", "feature changed"]);
+    await ingestSource(workspace, source);
+
+    let vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    let lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 2);
+      assert.equal(lexical.contentCount, 2);
+      assert.equal(lexical.chunkCount, 2);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+
+    const featureOldHits = await searchWorkspace(workspace, "shared branch update token", 5);
+    const featureNewHits = await searchWorkspace(workspace, "feature changed branch token", 5);
+    assert.equal(featureOldHits.some((hit) => hit.text.includes("shared branch update token")), false);
+    assert.equal(featureNewHits[0]?.branch_name, "feature");
+
+    await git(root, ["checkout", "main"]);
+    const mainOldHits = await searchWorkspace(workspace, "shared branch update token", 5);
+    const mainNewHits = await searchWorkspace(workspace, "feature changed branch token", 5);
+    assert.equal(mainOldHits[0]?.branch_name, "main");
+    assert.equal(mainNewHits.some((hit) => hit.text.includes("feature changed branch token")), false);
+
+    vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 2);
+      assert.equal(lexical.contentCount, 2);
+      assert.equal(lexical.chunkCount, 2);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function manifest(modelName: string, dim: number): WorkspaceManifest {
   return {
     workspace_id: "test-workspace",

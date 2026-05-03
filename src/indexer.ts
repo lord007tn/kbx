@@ -122,8 +122,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
         && isIndexedInBranch(indexed, branch?.scope)
         && !currentFilePaths.has(fileKey)
       ) {
-        store.deleteSource(fileKey);
-        lexical.deleteSource(fileKey);
+        deleteSourceAlias(store, lexical, fileKey);
         delete stats.files[fileKey];
         deleted += 1;
         await options.onProgress?.({
@@ -151,8 +150,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
             if (!isMissingFileError(error)) {
               throw error;
             }
-            store.deleteSource(fileKey);
-            lexical.deleteSource(fileKey);
+            deleteSourceAlias(store, lexical, fileKey);
             delete stats.files[fileKey];
             deleted += 1;
             await options.onProgress?.({
@@ -183,8 +181,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
         continue;
       }
 
-      store.deleteSource(fileKey);
-      lexical.deleteSource(fileKey);
+      deleteSourceAlias(store, lexical, fileKey);
       let content: string;
       try {
         content = await extractIndexableText(file.absolutePath, file.extension);
@@ -193,7 +190,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
           throw error;
         }
         delete stats.files[fileKey];
-        lexical.deleteSource(fileKey);
+        deleteSourceAlias(store, lexical, fileKey);
         deleted += 1;
         await options.onProgress?.({
           phase: "file",
@@ -477,6 +474,17 @@ async function embedAndUpsert(
   return inserted;
 }
 
+function deleteSourceAlias(store: ChunkVectorStore, lexical: LexicalIndexStore, source: string): void {
+  const contentIds = lexical.contentIdsForSource(source);
+  store.deleteSource(source);
+  lexical.deleteSource(source);
+  for (const contentId of contentIds) {
+    if (!lexical.hasContent(contentId)) {
+      store.deleteContent(contentId);
+    }
+  }
+}
+
 export async function loadIndexStats(workspace: Workspace, model: string, dim: number): Promise<IndexStats> {
   try {
     const stats = await readJson<IndexStats>(workspace.statsPath);
@@ -579,8 +587,7 @@ export async function removeSource(
   try {
     for (const [fileKey, indexed] of Object.entries(stats.files)) {
       if (sourceIncludesFile(source, indexedRelativePath(fileKey, indexed))) {
-        store.deleteSource(fileKey);
-        lexical.deleteSource(fileKey);
+        deleteSourceAlias(store, lexical, fileKey);
         delete stats.files[fileKey];
         removedFiles += 1;
       }

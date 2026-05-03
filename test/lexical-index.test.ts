@@ -58,6 +58,35 @@ test("LexicalIndexStore deletes all chunks for a source", async () => {
   }
 });
 
+test("LexicalIndexStore tracks content aliases separately from chunk aliases", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-content-alias-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const store = await LexicalIndexStore.open(workspace);
+    store.upsertChunks([
+      chunk({ id: "a", content_id: "content-a", source: "main.md", text: "shared content token" }),
+      chunk({ id: "b", content_id: "content-a", source: "feature.md", text: "shared content token" }),
+      chunk({ id: "c", content_id: "content-c", source: "unique.md", text: "unique content token" })
+    ]);
+
+    assert.equal(store.chunkCount, 3);
+    assert.equal(store.contentCount, 2);
+    assert.deepEqual(store.contentIdsForSource("main.md"), ["content-a"]);
+    assert.equal(store.hasContent("content-a"), true);
+    assert.equal(store.getChunk("b")?.content_id, "content-a");
+
+    store.deleteSource("main.md");
+    assert.equal(store.hasContent("content-a"), true);
+    store.deleteSource("feature.md");
+    assert.equal(store.hasContent("content-a"), false);
+    assert.equal(store.contentCount, 1);
+    await store.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("LexicalIndexStore ranks exact phrase and source matches first", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-rank-"));
   try {
@@ -150,9 +179,10 @@ test("LexicalIndexStore migrates legacy JSON indexes into SQLite", async () => {
   }
 });
 
-function chunk(overrides: { id: string; source: string; text: string }): ChunkRecord {
+function chunk(overrides: { id: string; source: string; text: string; content_id?: string }): ChunkRecord {
   return {
     id: overrides.id,
+    content_id: overrides.content_id,
     text: overrides.text,
     source: overrides.source,
     human_source: overrides.source,

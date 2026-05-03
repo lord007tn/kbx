@@ -85,6 +85,11 @@ export class ChunkVectorStore {
     assertStatus(status);
   }
 
+  deleteContent(id: string): void {
+    const status = this.collection.deleteByFilterSync(`source = '${escapeFilterString(id)}'`);
+    assertStatus(status);
+  }
+
   existingIds(ids: string[]): Set<string> {
     if (ids.length === 0) {
       return new Set();

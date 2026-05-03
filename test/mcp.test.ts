@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ingestSource } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { registerMcpTools } from "../src/mcp";
 import { SCHEMA_VERSION, type SourceEntry, type WorkspaceConfig, type WorkspaceManifest } from "../src/types";
 import { defaultConfig, workspaceFromRoot } from "../src/workspace";
+
+const exec = promisify(execFile);
 
 type ToolHandler = (input: Record<string, unknown>) => Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }>;
 
@@ -84,6 +88,41 @@ test("kbx_get_chunk fetches the alias id returned by search", async () => {
     assert.match(body.chunk.text, /alpha token/);
   } finally {
     await fixture.cleanup();
+  }
+});
+
+test("kbx_search includes branch metadata for Git-scoped results", async () => {
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-mcp-branch-"));
+  try {
+    await git(root, ["init", "-b", "main"]);
+    await git(root, ["config", "user.email", "kbx@example.test"]);
+    await git(root, ["config", "user.name", "kbx tests"]);
+    const workspace = workspaceFromRoot(root);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "branch.md"), "# Branch\n\nmcp branch metadata token\n", "utf8");
+    await git(root, ["add", "branch.md"]);
+    await git(root, ["commit", "-m", "branch metadata"]);
+    await writeJson(workspace.manifestPath, testManifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    await writeJson(workspace.sourcesPath, [source]);
+    await ingestSource(workspace, source);
+
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, workspace);
+    const response = await callTool(server, "kbx_search", {
+      query: "mcp branch metadata token",
+      top_k: 1
+    });
+    const body = JSON.parse(response.content[0]!.text) as { results: Array<{ branch?: string; source: string }> };
+
+    assert.equal(body.results[0]?.source, "branch.md");
+    assert.equal(body.results[0]?.branch, "main");
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -268,6 +307,10 @@ function restoreEnv(name: string, value: string | undefined): void {
   } else {
     process.env[name] = value;
   }
+}
+
+async function git(cwd: string, args: string[]): Promise<void> {
+  await exec("git", ["-C", cwd, ...args], { windowsHide: true });
 }
 
 async function waitForMtimeTick(): Promise<void> {

@@ -65,6 +65,15 @@ export class LexicalIndexStore {
     return (this.db.prepare("SELECT COUNT(*) AS count FROM chunks WHERE source = ?").get(source) as { count: number }).count;
   }
 
+  contentIdsForSource(source: string): string[] {
+    const rows = this.db.prepare("SELECT DISTINCT content_id FROM chunks WHERE source = ?").all(source) as Array<{ content_id: string }>;
+    return rows.map((row) => row.content_id).filter(Boolean);
+  }
+
+  hasContent(contentId: string): boolean {
+    return (this.db.prepare("SELECT COUNT(*) AS count FROM chunks WHERE content_id = ?").get(contentId) as { count: number }).count > 0;
+  }
+
   upsertChunks(chunks: ChunkRecord[]): void {
     this.assertWritable();
     if (chunks.length === 0) {

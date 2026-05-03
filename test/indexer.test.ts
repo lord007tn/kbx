@@ -7,6 +7,7 @@ import { ingestSource, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWor
 import { writeJson } from "../src/io";
 import { LexicalIndexStore } from "../src/lexical-index";
 import { SCHEMA_VERSION, type SourceEntry, type WorkspaceManifest } from "../src/types";
+import { ChunkVectorStore } from "../src/vector-store";
 import { defaultConfig, loadManifest, workspaceFromRoot } from "../src/workspace";
 
 test("rebuildWorkspaceIndexForModel swaps in a rebuilt index after success", async () => {
@@ -124,6 +125,47 @@ test("removeSource deletes matching chunks from the lexical index", async () => 
 
     assert.equal(obsoleteHits.length, 0);
     assert.equal(persistentHits[0]?.source, "keep.md");
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("removeSource deletes orphan vector content but preserves shared content", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-remove-vector-gc-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await mkdir(path.join(root, "docs"), { recursive: true });
+    await writeFile(path.join(root, "keep.md"), "# Shared\n\nshared source removal token\n", "utf8");
+    await writeFile(path.join(root, "docs", "shared.md"), "# Shared\n\nshared source removal token\n", "utf8");
+    await writeFile(path.join(root, "docs", "unique.md"), "# Unique\n\nunique source removal token\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const sources: SourceEntry[] = [
+      { path: "keep.md", kind: "workspace", include: [], exclude: [] },
+      { path: "docs", kind: "workspace", include: [], exclude: [] }
+    ];
+    await writeJson(workspace.sourcesPath, sources);
+    await ingestSource(workspace, sources[0]!);
+    await ingestSource(workspace, sources[1]!);
+
+    await removeSource(workspace, "docs");
+
+    const vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 1);
+      assert.equal(lexical.contentCount, 1);
+      assert.equal(lexical.chunkCount, 1);
+      assert.equal(lexical.search("shared source removal token", 5)[0]?.source, "keep.md");
+      assert.equal(lexical.search("unique source removal token", 5).some((hit) => hit.text.includes("unique source removal token")), false);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });
