@@ -144,36 +144,30 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
           && sourceIncludesFile(source, file.relativePath)
           && lexical.sourceChunkCount(fileKey) !== existingFile.chunks
         ) {
-          const storedChunks = store.listSourceChunks(fileKey, existingFile.chunks);
-          if (storedChunks.length === existingFile.chunks) {
-            await queueLexicalRepair(storedChunks);
-          } else {
-            let content: string;
-            try {
-              content = await extractIndexableText(file.absolutePath, file.extension);
-            } catch (error) {
-              if (!isMissingFileError(error)) {
-                throw error;
-              }
-              store.deleteSource(fileKey);
-              lexical.deleteSource(fileKey);
-              delete stats.files[fileKey];
-              deleted += 1;
-              await options.onProgress?.({
-                phase: "file",
-                source: source.path,
-                file: file.relativePath,
-                processedFiles: index + 1,
-                totalFiles: files.length,
-                insertedChunks,
-                skippedFiles: skipped,
-                deletedFiles: deleted
-              });
-              continue;
+          let content: string;
+          try {
+            content = await extractIndexableText(file.absolutePath, file.extension);
+          } catch (error) {
+            if (!isMissingFileError(error)) {
+              throw error;
             }
-            const contentHash = hashContent(content);
-            await queueLexicalRepair(chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, contentHash, config, branch));
+            store.deleteSource(fileKey);
+            lexical.deleteSource(fileKey);
+            delete stats.files[fileKey];
+            deleted += 1;
+            await options.onProgress?.({
+              phase: "file",
+              source: source.path,
+              file: file.relativePath,
+              processedFiles: index + 1,
+              totalFiles: files.length,
+              insertedChunks,
+              skippedFiles: skipped,
+              deletedFiles: deleted
+            });
+            continue;
           }
+          await queueLexicalRepair(chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, config, branch));
         }
         skipped += 1;
         await options.onProgress?.({
@@ -215,7 +209,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
       }
 
       const contentHash = hashContent(content);
-      const chunks = chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, contentHash, config, branch);
+      const chunks = chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, config, branch);
 
       insertedChunks += await embedAndUpsert(store, embedder, chunks);
       lexical.upsertChunks(chunks);
@@ -280,7 +274,6 @@ function chunksForFile(
   extension: string,
   mtime: number,
   content: string,
-  contentHash: string,
   config: Awaited<ReturnType<typeof loadConfig>>,
   branch: BranchContext | null
 ): ChunkRecord[] {
@@ -299,22 +292,26 @@ function chunksForFile(
       ? chunkSentences(chunkInput)
       : chunkText(chunkInput);
 
-  return textChunks.map((chunk) => ({
-    id: chunk.id,
-    text: chunk.text,
-    source: sourceKey,
-    human_source: humanSource(source, relativePath),
-    citation_source: citationSource(source, relativePath),
-    source_origin: source.kind,
-    chunk_idx: chunk.chunk_idx,
-    mtime,
-    tags: encodeChunkTags({
-      branch_scope: branch?.scope,
-      branch_name: branch?.name,
-      git_head: branch?.head,
-      content_hash: contentHash
-    })
-  }));
+  return textChunks.map((chunk) => {
+    const chunkContentHash = hashContent(chunk.text);
+    return {
+      id: chunk.id,
+      content_id: `c${chunkContentHash.slice(0, 23)}`,
+      text: chunk.text,
+      source: sourceKey,
+      human_source: humanSource(source, relativePath),
+      citation_source: citationSource(source, relativePath),
+      source_origin: source.kind,
+      chunk_idx: chunk.chunk_idx,
+      mtime,
+      tags: encodeChunkTags({
+        branch_scope: branch?.scope,
+        branch_name: branch?.name,
+        git_head: branch?.head,
+        content_hash: chunkContentHash
+      })
+    };
+  });
 }
 
 function totalIndexedChunks(stats: IndexStats): number {
@@ -462,13 +459,20 @@ async function embedAndUpsert(
   let inserted = 0;
   for (let start = 0; start < chunks.length; start += EMBED_BATCH_SIZE) {
     const batch = chunks.slice(start, start + EMBED_BATCH_SIZE);
-    const embeddings = await embedder.embed(batch.map((chunk) => chunk.text));
-    const embeddedChunks: EmbeddedChunkRecord[] = batch.map((chunk, index) => ({
+    const uniqueChunks = [...new Map(batch.map((chunk) => [chunk.content_id ?? chunk.id, chunk])).values()];
+    const existing = store.existingIds(uniqueChunks.map((chunk) => chunk.content_id ?? chunk.id));
+    const chunksToEmbed = uniqueChunks.filter((chunk) => !existing.has(chunk.content_id ?? chunk.id));
+    if (chunksToEmbed.length === 0) {
+      inserted += batch.length;
+      continue;
+    }
+    const embeddings = await embedder.embed(chunksToEmbed.map((chunk) => chunk.text));
+    const embeddedChunks: EmbeddedChunkRecord[] = chunksToEmbed.map((chunk, index) => ({
       ...chunk,
       embedding: embeddings[index] ?? []
     }));
     store.upsertChunks(embeddedChunks);
-    inserted += embeddedChunks.length;
+    inserted += batch.length;
   }
   return inserted;
 }

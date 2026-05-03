@@ -70,6 +70,7 @@ export interface RegistryEntry {
 
 export interface ChunkRecord {
   id: string;
+  content_id?: string;
   text: string;
   source: string;
   human_source: string;
@@ -104,6 +105,7 @@ export interface IndexStats {
 
 export interface SearchHit {
   id: string;
+  content_id?: string;
   source: string;
   citation_source: string;
   chunk_idx: number;

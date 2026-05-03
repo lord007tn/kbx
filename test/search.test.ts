@@ -7,8 +7,10 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { ingestSource } from "../src/indexer";
 import { writeJson } from "../src/io";
+import { LexicalIndexStore } from "../src/lexical-index";
 import { searchRegisteredWorkspaces, searchWorkspace } from "../src/search";
 import { SCHEMA_VERSION, type RegistryEntry, type SourceEntry, type WorkspaceManifest } from "../src/types";
+import { ChunkVectorStore } from "../src/vector-store";
 import { defaultConfig, workspaceFromRoot } from "../src/workspace";
 
 const exec = promisify(execFile);
@@ -231,6 +233,51 @@ test("searchWorkspace scopes indexed workspace content to the checked out Git br
     assert.equal(mainHits[0]?.source, "note.md");
     assert.equal(mainHits[0]?.branch_name, "main");
     assert.equal(mainFeatureHits.some((hit) => hit.text.includes("feature branch unique token")), false);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ingest deduplicates identical vector content across branch aliases", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-branch-dedupe-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    await git(root, ["init", "-b", "main"]);
+    await git(root, ["config", "user.email", "kbx@example.test"]);
+    await git(root, ["config", "user.name", "kbx tests"]);
+
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+
+    await writeFile(path.join(root, "shared.md"), "# Shared\n\nsame branch content token\n", "utf8");
+    await git(root, ["add", "shared.md"]);
+    await git(root, ["commit", "-m", "main shared"]);
+    await ingestSource(workspace, source);
+
+    await git(root, ["checkout", "-b", "feature"]);
+    await git(root, ["commit", "--allow-empty", "-m", "feature branch"]);
+    await ingestSource(workspace, source);
+
+    const vector = await ChunkVectorStore.open(workspace, 3, { readOnly: true });
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    try {
+      assert.equal(vector.docCount, 1);
+      assert.equal(lexical.contentCount, 1);
+      assert.equal(lexical.chunkCount, 2);
+    } finally {
+      vector.close();
+      await lexical.close();
+    }
+
+    const featureHits = await searchWorkspace(workspace, "same branch content token", 3);
+    assert.equal(featureHits[0]?.source, "shared.md");
+    assert.equal(featureHits[0]?.branch_name, "feature");
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });

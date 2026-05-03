@@ -56,13 +56,14 @@ export class ChunkVectorStore {
       return;
     }
 
-    for (let start = 0; start < chunks.length; start += ZVEC_BATCH_SIZE) {
+    const contentChunks = [...new Map(chunks.map((chunk) => [chunk.content_id ?? chunk.id, chunk])).values()];
+    for (let start = 0; start < contentChunks.length; start += ZVEC_BATCH_SIZE) {
       const statuses = this.collection.upsertSync(
-        chunks.slice(start, start + ZVEC_BATCH_SIZE).map((chunk) => ({
-          id: chunk.id,
+        contentChunks.slice(start, start + ZVEC_BATCH_SIZE).map((chunk) => ({
+          id: chunk.content_id ?? chunk.id,
           fields: {
             text: chunk.text,
-            source: chunk.source,
+            source: chunk.content_id ?? chunk.source,
             human_source: chunk.human_source,
             citation_source: chunk.citation_source,
             source_origin: chunk.source_origin,
@@ -82,6 +83,20 @@ export class ChunkVectorStore {
   deleteSource(source: string): void {
     const status = this.collection.deleteByFilterSync(`source = '${escapeFilterString(source)}'`);
     assertStatus(status);
+  }
+
+  existingIds(ids: string[]): Set<string> {
+    if (ids.length === 0) {
+      return new Set();
+    }
+    const existing = new Set<string>();
+    for (let start = 0; start < ids.length; start += ZVEC_BATCH_SIZE) {
+      const batch = ids.slice(start, start + ZVEC_BATCH_SIZE);
+      for (const id of Object.keys(this.collection.fetchSync(batch))) {
+        existing.add(id);
+      }
+    }
+    return existing;
   }
 
   destroy(): void {
@@ -180,8 +195,11 @@ function initializeZvec(workspace: Workspace): void {
 
 function toSearchHit(doc: ZVecDoc): SearchHit {
   const tags = parseChunkTags(String(doc.fields.tags ?? ""));
+  const rawSource = String(doc.fields.source ?? "");
+  const contentId = /^c[0-9a-f]{23}$/.test(rawSource) ? rawSource : undefined;
   return {
     id: doc.id,
+    content_id: contentId,
     source: String(doc.fields.human_source ?? ""),
     citation_source: String(doc.fields.citation_source ?? ""),
     chunk_idx: Number(doc.fields.chunk_idx ?? 0),

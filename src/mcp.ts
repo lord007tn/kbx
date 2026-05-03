@@ -22,7 +22,7 @@ import {
   scanWorkspaceFreshness
 } from "./indexer";
 import { searchRegisteredWorkspaces, searchWorkspace } from "./search";
-import { ChunkVectorStore } from "./vector-store";
+import { LexicalIndexStore } from "./lexical-index";
 import { KBX_VERSION } from "./version";
 
 const DEFAULT_SEARCH_PREVIEW_CHARS = 360;
@@ -197,13 +197,10 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
       }
     },
     async ({ id }) => {
-      const [manifest, config] = await Promise.all([
-        loadManifest(workspace),
-        loadConfig(workspace)
-      ]);
-      const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
+      const config = await loadConfig(workspace);
+      const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
       try {
-        const chunk = store.getChunk(id);
+        const chunk = lexical.getChunk(id);
         if (!chunk) {
           return textResult(JSON.stringify({ error: "chunk_not_found", id }, null, 2), true);
         }
@@ -217,7 +214,7 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
           }
         }, null, 2));
       } finally {
-        store.close();
+        await lexical.close();
       }
     }
   );

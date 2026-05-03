@@ -66,6 +66,28 @@ test("kbx_search_many returns separate result groups", async () => {
   }
 });
 
+test("kbx_get_chunk fetches the alias id returned by search", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-get-chunk-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const searchResponse = await callTool(server, "kbx_search", {
+      query: "alpha token",
+      top_k: 1
+    });
+    const searchBody = JSON.parse(searchResponse.content[0]!.text) as { results: Array<{ id: string }> };
+    const response = await callTool(server, "kbx_get_chunk", { id: searchBody.results[0]!.id });
+    const body = JSON.parse(response.content[0]!.text) as { chunk: { source: string; text: string } };
+
+    assert.equal(body.chunk.source, "alpha.md");
+    assert.match(body.chunk.text, /alpha token/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+
 test("kbx_refresh_file updates indexed search content", async () => {
   const fixture = await createIndexedWorkspace("kbx-mcp-refresh-");
   try {

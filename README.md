@@ -63,7 +63,7 @@ Supported ingest inputs include Markdown, plain text, PDF, DOCX, PPTX, XLSX, EPU
 
 Ingest respects `.gitignore` plus an optional root `.kbxignore` file. Use `.kbxignore` for files that should stay in the repo but not become searchable context, such as large dumps, screenshots, generated declarations, or exported artifacts.
 
-Inside Git workspaces, workspace-file chunks are tagged with the checked-out branch and commit at ingest time. Search defaults to the current branch when that branch has indexed content, so the same path can have separate indexed content on `main` and a feature branch. Non-Git workspaces keep the original path-based behavior.
+Inside Git workspaces, workspace-file chunks are tagged with the checked-out branch and commit at ingest time. Search defaults to the current branch when that branch has indexed content, so the same path can have separate indexed content on `main` and a feature branch. Identical chunk text across branches is embedded once and reused through branch/path aliases. Non-Git workspaces keep the original path-based behavior.
 
 Image ingest indexes embedded PNG text metadata and can run OCR when `tesseract` is available. To plug in a different OCR engine, set `KBX_OCR_COMMAND` to a command that writes extracted text to stdout; use `{file}` as the image path placeholder:
 
@@ -181,7 +181,7 @@ Implemented:
 - PDF and DOCX text extraction during ingest
 - ingest policy overrides with `--include`, `--exclude`, and `--no-gitignore`
 - root `.kbxignore` support in addition to `.gitignore`
-- Git branch-scoped workspace indexing and branch-aware search defaults
+- Git branch-scoped workspace indexing, branch-aware search defaults, and vector storage dedupe for identical chunk content
 - heading-aware Markdown, fixed text/code, and sentence chunking
 - Zvec-backed local vector collection
 - hybrid vector and SQLite FTS5 lexical retrieval

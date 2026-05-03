@@ -38,21 +38,56 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   }
 
   const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
-  let vectorHits: SearchHit[];
+  let rawVectorHits: SearchHit[];
   try {
-    vectorHits = branchFilter(store.search(queryEmbedding, Math.max(topK * 12, 50)), branchScope, filterToBranch);
+    rawVectorHits = store.search(queryEmbedding, Math.max(topK * 12, 50));
   } finally {
     store.close();
   }
 
   const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+  let vectorHits: SearchHit[];
   let lexicalHits: SearchHit[];
   try {
+    vectorHits = expandVectorHits(lexical, rawVectorHits, branchScope, filterToBranch, Math.max(topK * 4, 20));
     lexicalHits = branchFilter(lexical.search(query, Math.max(topK * 12, 50)), branchScope, filterToBranch);
   } finally {
     await lexical.close();
   }
   return fuseHits(query, vectorHits, lexicalHits, topK, options);
+}
+
+function expandVectorHits(
+  lexical: LexicalIndexStore,
+  hits: SearchHit[],
+  branchScope: string | undefined,
+  filterToBranch: boolean,
+  limit: number
+): SearchHit[] {
+  const expanded: SearchHit[] = [];
+  for (const hit of hits) {
+    const contentId = hit.content_id;
+    if (!contentId || !isContentId(contentId)) {
+      expanded.push(...branchFilter([hit], branchScope, filterToBranch));
+      continue;
+    }
+
+    const aliases = lexical.aliasesForContent(contentId, filterToBranch ? branchScope : undefined, 4);
+    expanded.push(...aliases.map((alias) => ({
+      ...alias,
+      score: hit.score,
+      snippet: undefined,
+      match: "vector" as const
+    })));
+    if (expanded.length >= limit) {
+      break;
+    }
+  }
+  return expanded.slice(0, limit);
+}
+
+function isContentId(id: string): boolean {
+  return /^c[0-9a-f]{23}$/.test(id);
 }
 
 function branchFilter(hits: SearchHit[], branchScope: string | undefined, enabled: boolean): SearchHit[] {

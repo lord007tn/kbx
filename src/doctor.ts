@@ -87,15 +87,16 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
   try {
     const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
     try {
-      const matchesCollection = vectorChunkCount === null || lexical.chunkCount === vectorChunkCount;
+      const lexicalContentCount = lexical.contentCount;
+      const matchesCollection = vectorChunkCount === null || lexicalContentCount === vectorChunkCount;
       lines.push({
         ok: matchesCollection,
         label: "lexical",
         detail: vectorChunkCount === null
-          ? `${lexical.chunkCount} chunk(s); collection count unavailable`
+          ? `${lexical.chunkCount} chunk alias(es), ${lexicalContentCount} unique content chunk(s); collection count unavailable`
           : matchesCollection
-            ? `${lexical.chunkCount} chunk(s), matches collection`
-            : `${lexical.chunkCount} chunk(s), collection has ${vectorChunkCount}; run kbx ingest to repair hybrid retrieval`
+            ? `${lexical.chunkCount} chunk alias(es), ${lexicalContentCount} unique content chunk(s), matches collection`
+            : `${lexical.chunkCount} chunk alias(es), ${lexicalContentCount} unique content chunk(s), collection has ${vectorChunkCount}; run kbx ingest to repair hybrid retrieval`
       });
     } finally {
       await lexical.close();

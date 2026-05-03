@@ -7,7 +7,7 @@ import { parseChunkTags } from "./chunk-tags";
 import { lexicalEnhancementScore, queryTerms, snippetForQuery } from "./retrieval";
 import type { Workspace } from "./workspace";
 
-const LEXICAL_SCHEMA_VERSION = 2;
+const LEXICAL_SCHEMA_VERSION = 3;
 const FUZZY_TERM_LIMIT = 2000;
 
 interface LexicalIndexFile {
@@ -17,6 +17,7 @@ interface LexicalIndexFile {
 
 interface ChunkRow {
   id: string;
+  content_id: string;
   text: string;
   source: string;
   human_source: string;
@@ -56,6 +57,10 @@ export class LexicalIndexStore {
     return (this.db.prepare("SELECT COUNT(*) AS count FROM chunks").get() as { count: number }).count;
   }
 
+  get contentCount(): number {
+    return (this.db.prepare("SELECT COUNT(DISTINCT content_id) AS count FROM chunks").get() as { count: number }).count;
+  }
+
   sourceChunkCount(source: string): number {
     return (this.db.prepare("SELECT COUNT(*) AS count FROM chunks WHERE source = ?").get(source) as { count: number }).count;
   }
@@ -72,9 +77,9 @@ export class LexicalIndexStore {
     const deleteChunk = this.db.prepare("DELETE FROM chunks WHERE id = ?");
     const insertChunk = this.db.prepare(`
       INSERT INTO chunks (
-        id, text, source, human_source, citation_source, source_origin, chunk_idx, mtime, tags
+        id, content_id, text, source, human_source, citation_source, source_origin, chunk_idx, mtime, tags
       ) VALUES (
-        @id, @text, @source, @human_source, @citation_source, @source_origin, @chunk_idx, @mtime, @tags
+        @id, @content_id, @text, @source, @human_source, @citation_source, @source_origin, @chunk_idx, @mtime, @tags
       )
     `);
     const insertFts = this.db.prepare(`
@@ -88,13 +93,17 @@ export class LexicalIndexStore {
     const insertTerm = this.db.prepare("INSERT OR IGNORE INTO chunk_terms (term, chunk_id) VALUES (?, ?)");
     const transaction = this.db.transaction((records: ChunkRecord[]) => {
       for (const chunk of records) {
+        const row = {
+          ...chunk,
+          content_id: chunk.content_id ?? chunk.id
+        };
         deleteTerms.run(chunk.id);
         deleteFts.run(chunk.id);
         deleteTrigram.run(chunk.id);
         deleteChunk.run(chunk.id);
-        insertChunk.run(chunk);
-        insertFts.run(chunk);
-        insertTrigram.run(chunk);
+        insertChunk.run(row);
+        insertFts.run(row);
+        insertTrigram.run(row);
         for (const term of lexicalTerms(`${chunk.source}\n${chunk.human_source}\n${chunk.text}`)) {
           insertTerm.run(term, chunk.id);
         }
@@ -142,6 +151,51 @@ export class LexicalIndexStore {
       .map(({ chunk, score }) => toSearchHit(chunk, score, query));
   }
 
+  getChunk(id: string): ChunkRecord | null {
+    const row = this.db.prepare(`
+      SELECT
+        id,
+        content_id,
+        text,
+        source,
+        human_source,
+        citation_source,
+        source_origin,
+        chunk_idx,
+        mtime,
+        tags
+      FROM chunks
+      WHERE id = ?
+    `).get(id) as ChunkRow | undefined;
+    return row ? rowToChunk(row) : null;
+  }
+
+  aliasesForContent(contentId: string, branchScope: string | undefined, limit: number): SearchHit[] {
+    const rows = this.db.prepare(`
+      SELECT
+        id,
+        content_id,
+        text,
+        source,
+        human_source,
+        citation_source,
+        source_origin,
+        chunk_idx,
+        mtime,
+        tags
+      FROM chunks
+      WHERE content_id = ?
+      ORDER BY source, chunk_idx
+      LIMIT ?
+    `).all(contentId, Math.max(limit * 20, 200)) as ChunkRow[];
+
+    return rows
+      .map(rowToChunk)
+      .filter((chunk) => branchScope === undefined || parseChunkTags(chunk.tags).branch_scope === branchScope)
+      .slice(0, limit)
+      .map((chunk) => toSearchHit(chunk, 0, ""));
+  }
+
   async close(): Promise<void> {
     this.db.close();
   }
@@ -155,6 +209,7 @@ export class LexicalIndexStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chunks (
         id TEXT PRIMARY KEY,
+        content_id TEXT NOT NULL DEFAULT '',
         text TEXT NOT NULL,
         source TEXT NOT NULL,
         human_source TEXT NOT NULL,
@@ -165,6 +220,7 @@ export class LexicalIndexStore {
         tags TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS chunks_source_idx ON chunks(source);
+      CREATE INDEX IF NOT EXISTS chunks_content_idx ON chunks(content_id);
       CREATE TABLE IF NOT EXISTS chunk_terms (
         term TEXT NOT NULL,
         chunk_id TEXT NOT NULL,
@@ -189,6 +245,7 @@ export class LexicalIndexStore {
       );
       PRAGMA user_version = ${LEXICAL_SCHEMA_VERSION};
     `);
+    this.ensureContentIdColumn();
   }
 
   private async migrateLegacyJson(workspace: Workspace): Promise<void> {
@@ -231,6 +288,7 @@ export class LexicalIndexStore {
       return this.db.prepare(`
         SELECT
           c.id,
+          c.content_id,
           c.text,
           c.source,
           c.human_source,
@@ -276,6 +334,7 @@ export class LexicalIndexStore {
     return this.db.prepare(`
       SELECT
         id,
+        content_id,
         text,
         source,
         human_source,
@@ -326,6 +385,7 @@ export class LexicalIndexStore {
     return this.db.prepare(`
       SELECT DISTINCT
         c.id,
+        c.content_id,
         c.text,
         c.source,
         c.human_source,
@@ -367,12 +427,24 @@ export class LexicalIndexStore {
       throw new Error("Cannot mutate read-only lexical index.");
     }
   }
+
+  private ensureContentIdColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(chunks)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "content_id")) {
+      this.db.exec("ALTER TABLE chunks ADD COLUMN content_id TEXT NOT NULL DEFAULT '';");
+    }
+    this.db.exec(`
+      UPDATE chunks SET content_id = id WHERE content_id = '';
+      CREATE INDEX IF NOT EXISTS chunks_content_idx ON chunks(content_id);
+    `);
+  }
 }
 
 function toSearchHit(chunk: ChunkRecord, score: number, query: string): SearchHit {
   const tags = parseChunkTags(chunk.tags);
   return {
     id: chunk.id,
+    content_id: chunk.content_id ?? chunk.id,
     source: chunk.human_source,
     citation_source: chunk.citation_source,
     chunk_idx: chunk.chunk_idx,
@@ -390,6 +462,7 @@ function toSearchHit(chunk: ChunkRecord, score: number, query: string): SearchHi
 function rowToChunk(row: ChunkRow): ChunkRecord {
   return {
     id: row.id,
+    content_id: row.content_id || row.id,
     text: row.text,
     source: row.source,
     human_source: row.human_source,
