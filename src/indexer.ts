@@ -232,11 +232,23 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
       });
     }
 
+    const ingestedAt = new Date().toISOString();
+    const nextBranches = {
+      ...(stats.branches ?? {})
+    };
+    if (branch) {
+      nextBranches[branch.scope] = {
+        name: branch.name,
+        git_head: branch.head,
+        last_ingest_at: ingestedAt
+      };
+    }
     const nextStats: IndexStats = {
       schema_version: SCHEMA_VERSION,
       model: manifest.model,
       dim: manifest.dim,
-      last_ingest_at: new Date().toISOString(),
+      last_ingest_at: ingestedAt,
+      branches: nextBranches,
       files: stats.files
     };
     await flushLexicalRepair();
@@ -504,6 +516,7 @@ export async function loadIndexStats(workspace: Workspace, model: string, dim: n
       model,
       dim,
       last_ingest_at: "",
+      branches: {},
       files: {}
     };
   }
@@ -700,6 +713,7 @@ function emptyStats(manifest: WorkspaceManifest): IndexStats {
     model: manifest.model,
     dim: manifest.dim,
     last_ingest_at: new Date().toISOString(),
+    branches: {},
     files: {}
   };
 }

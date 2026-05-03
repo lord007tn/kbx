@@ -30,7 +30,7 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   const branch = await currentBranchContext(workspace.root);
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
   const branchScope = branch?.scope;
-  const filterToBranch = branchIndexExists(stats.files, branchScope);
+  const filterToBranch = branchIndexExists(stats.files, branchScope, stats.branches);
   const embedder = createEmbedder(manifest.model, manifest.dim);
   const [queryEmbedding] = await embedder.embed([query]);
   if (!queryEmbedding) {

@@ -180,6 +180,10 @@ export class LexicalIndexStore {
   }
 
   aliasesForContent(contentId: string, branchScope: string | undefined, limit: number): SearchHit[] {
+    const branchClause = branchScope === undefined
+      ? ""
+      : "AND json_valid(tags) AND json_extract(tags, '$.branch_scope') = ?";
+    const params = branchScope === undefined ? [contentId, limit] : [contentId, branchScope, limit];
     const rows = this.db.prepare(`
       SELECT
         id,
@@ -194,15 +198,12 @@ export class LexicalIndexStore {
         tags
       FROM chunks
       WHERE content_id = ?
+      ${branchClause}
       ORDER BY source, chunk_idx
       LIMIT ?
-    `).all(contentId, Math.max(limit * 20, 200)) as ChunkRow[];
+    `).all(...params) as ChunkRow[];
 
-    return rows
-      .map(rowToChunk)
-      .filter((chunk) => branchScope === undefined || parseChunkTags(chunk.tags).branch_scope === branchScope)
-      .slice(0, limit)
-      .map((chunk) => toSearchHit(chunk, 0, ""));
+    return rows.map(rowToChunk).map((chunk) => toSearchHit(chunk, 0, ""));
   }
 
   async close(): Promise<void> {

@@ -100,6 +100,11 @@ export interface IndexStats {
   model: string;
   dim: number;
   last_ingest_at: string;
+  branches?: Record<string, {
+    name: string;
+    git_head: string;
+    last_ingest_at: string;
+  }>;
   files: Record<string, IndexedFileStats>;
 }
 

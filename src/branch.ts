@@ -55,8 +55,12 @@ export function isIndexedInBranch(stats: IndexedFileStats, branchScope: string |
   return stats.branch_scope === branchScope;
 }
 
-export function branchIndexExists(files: Record<string, IndexedFileStats>, branchScope: string | undefined): boolean {
-  return branchScope !== undefined && Object.values(files).some((file) => file.branch_scope === branchScope);
+export function branchIndexExists(
+  files: Record<string, IndexedFileStats>,
+  branchScope: string | undefined,
+  branches: Record<string, unknown> = {}
+): boolean {
+  return branchScope !== undefined && (branches[branchScope] !== undefined || Object.values(files).some((file) => file.branch_scope === branchScope));
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {

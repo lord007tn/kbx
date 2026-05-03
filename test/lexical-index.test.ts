@@ -87,6 +87,40 @@ test("LexicalIndexStore tracks content aliases separately from chunk aliases", a
   }
 });
 
+test("LexicalIndexStore filters content aliases by branch before limiting", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-branch-alias-limit-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const store = await LexicalIndexStore.open(workspace);
+    store.upsertChunks([
+      ...Array.from({ length: 250 }, (_, index) => chunk({
+        id: `other-${index}`,
+        content_id: "content-shared",
+        source: `git:branch%3Aother:a-${String(index).padStart(3, "0")}.md`,
+        text: "shared branch alias token",
+        tags: JSON.stringify({ branch_scope: "branch:other", branch_name: "other" })
+      })),
+      chunk({
+        id: "wanted",
+        content_id: "content-shared",
+        source: "git:branch%3Awanted:z-wanted.md",
+        text: "shared branch alias token",
+        tags: JSON.stringify({ branch_scope: "branch:wanted", branch_name: "wanted" })
+      })
+    ]);
+
+    const aliases = store.aliasesForContent("content-shared", "branch:wanted", 1);
+
+    assert.equal(aliases.length, 1);
+    assert.equal(aliases[0]?.id, "wanted");
+    assert.equal(aliases[0]?.branch_name, "wanted");
+    await store.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("LexicalIndexStore ranks exact phrase and source matches first", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-rank-"));
   try {
@@ -179,7 +213,7 @@ test("LexicalIndexStore migrates legacy JSON indexes into SQLite", async () => {
   }
 });
 
-function chunk(overrides: { id: string; source: string; text: string; content_id?: string }): ChunkRecord {
+function chunk(overrides: { id: string; source: string; text: string; content_id?: string; tags?: string }): ChunkRecord {
   return {
     id: overrides.id,
     content_id: overrides.content_id,
@@ -190,6 +224,6 @@ function chunk(overrides: { id: string; source: string; text: string; content_id
     source_origin: "workspace",
     chunk_idx: 0,
     mtime: 1,
-    tags: ""
+    tags: overrides.tags ?? ""
   };
 }
