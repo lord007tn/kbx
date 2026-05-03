@@ -392,7 +392,7 @@ The lexical index is derived data. Reset, model switch reindex, source removal, 
 
 ### 7.11 Ingest policy
 
-v1 uses a conservative default ingest policy. It respects `.gitignore`, uses built-in excludes, and indexes only text-like file types.
+v1 uses a conservative default ingest policy. It respects `.gitignore`, respects an optional root `.kbxignore`, uses built-in excludes, and indexes only text-like file types.
 
 Included by default:
 - Markdown and prose: `.md`, `.mdx`, `.txt`
@@ -404,9 +404,11 @@ Always excluded:
 - `.kbx/` except `.kbx/imports/`
 - dependency directories such as `node_modules/`, `vendor/`
 - build/cache output such as `dist/`, `build/`, `.next/`, `.turbo/`, `coverage/`
+- common generated files such as `*.gen.*`, `*.generated.*`, generated declarations, protobuf outputs, icon-font exports, and Prisma migration locks
+- env files, common private keys/certificates, password databases, and `secrets/` directories
 - binary files and files that fail text detection
 
-Advanced users can override defaults with `--include`, `--exclude`, and `--no-gitignore`.
+Advanced users can override defaults with `--include`, `--exclude`, and `--no-gitignore`. Project-specific searchable-context exclusions should go in root `.kbxignore` when they should not affect Git.
 
 External paths are rejected unless `--allow-external` is passed. With `--allow-external`, files are copied into `.kbx/imports/` before indexing so the workspace remains the source of truth for indexed content without polluting the visible project tree. External import is a snapshot in v1: later changes at the original external path are not synced automatically. Re-running `kbx ingest <external-path> --allow-external` imports a new snapshot.
 

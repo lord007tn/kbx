@@ -10,7 +10,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Workspace initialization under `.kbx/` with manifest, config, source manifest, collection path, and user-level registry.
 - Workspace registry commands for listing, forgetting, and deleting workspace knowledge bases.
 - Source management for listing and removing ingest sources.
-- Conservative ingest policy for Markdown, plain text, common source files, and structured text formats.
+- Conservative ingest policy for Markdown, plain text, common source files, generated-file exclusions, and structured text formats.
 - PDF, DOCX, PPTX, XLSX, and EPUB text extraction during ingest.
 - Image ingest for PNG/JPEG/WebP/GIF/TIFF/BMP extensions, with PNG text metadata extraction and optional OCR through `tesseract` or `KBX_OCR_COMMAND`.
 - External import snapshots with `--allow-external`, stored under `.kbx/imports/`.
@@ -30,6 +30,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Workspace stats, freshness reporting, explicit search freshness, reset, doctor checks, lexical/vector consistency checks, and benchmark options.
 - Doctor repair flow via `kbx doctor --repair`.
 - Watch ingest mode using current workspace/source boundaries via `kbx ingest --watch` and `kbx watch`.
+- Root `.kbxignore` support in addition to `.gitignore`.
 - Session memory commands: `kbx memory add`, `kbx memory list`, and `kbx memory prune`.
 - Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, and `kbx_agent_guide`.
 - MCP maintenance tools: `kbx_refresh_index`, `kbx_refresh_file`, `kbx_watch_status`, and `kbx_mcp_config`.
@@ -45,6 +46,7 @@ This document records what is already present in the current `kbx` codebase so t
 - CI and npm release workflow with enforced npm package content validation, install smoke tests, npm provenance publishing, and `changelogithub` GitHub releases.
 - Release preflight script that runs typecheck, tests, build, and install smoke checks.
 - Conservative default ingest exclusions for env files, common private keys/certificates, password databases, and `secrets/` directories.
+- Local project benchmark script for comparing embedder and reranker variants across real workspaces.
 
 ## Verified Locally
 

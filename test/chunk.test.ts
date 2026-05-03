@@ -15,6 +15,18 @@ test("chunkMarkdown removes frontmatter and chunks markdown text", () => {
   assert.equal(chunks.some((chunk) => chunk.text.includes("title: Example")), false);
 });
 
+test("chunkMarkdown tolerates invalid frontmatter", () => {
+  const chunks = chunkMarkdown({
+    source: "notes/invalid-frontmatter.md",
+    content: "---\ntitle: [unterminated\n---\n# Note\n\nBody text.",
+    maxChars: 800,
+    overlapChars: 100
+  });
+
+  assert.equal(chunks.length > 0, true);
+  assert.equal(chunks.some((chunk) => chunk.text.includes("Body text.")), true);
+});
+
 test("chunkMarkdown returns stable chunk ids", () => {
   const first = chunkMarkdown({
     source: "notes/example.md",

@@ -68,6 +68,20 @@ const DEFAULT_EXCLUDES = [
   ".next/**",
   ".turbo/**",
   "coverage/**",
+  "*.gen.*",
+  "*.generated.*",
+  "*.pb.go",
+  "*.pb.ts",
+  "auto-imports.d.ts",
+  "cloudflare-env.d.ts",
+  "components.d.ts",
+  "typed-router.d.ts",
+  "worker-configuration.d.ts",
+  "**/icons/demo.html",
+  "**/icons/fonts/icomoon.svg",
+  "**/icons/selection.json",
+  "**/icons/style.css",
+  "**/prisma/migrations/migration_lock.toml",
   ".env",
   ".env.*",
   "*.env",
@@ -259,17 +273,22 @@ function emptyGitignorePolicy(): GitignorePolicy {
 
 async function loadGitignore(workspaceRoot: string): Promise<GitignorePolicy> {
   const matcher = ignore();
-  try {
-    const raw = await readFile(path.join(workspaceRoot, ".gitignore"), "utf8");
-    matcher.add(raw);
-    return {
-      ignores: (relativePath) => matcher.ignores(relativePath),
-      patterns: raw.split(/\r?\n/)
-    };
-  } catch {
-    // A workspace without .gitignore is valid.
-    return emptyGitignorePolicy();
+  const patterns: string[] = [];
+  for (const fileName of [".gitignore", ".kbxignore"]) {
+    try {
+      const raw = await readFile(path.join(workspaceRoot, fileName), "utf8");
+      matcher.add(raw);
+      patterns.push(...raw.split(/\r?\n/));
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
   }
+  return {
+    ignores: (relativePath) => matcher.ignores(relativePath),
+    patterns
+  };
 }
 
 function safeGitignoreGlobExcludes(patterns: string[]): string[] {

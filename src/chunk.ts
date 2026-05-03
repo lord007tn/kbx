@@ -16,7 +16,7 @@ export interface TextChunk {
 }
 
 export function chunkMarkdown(input: ChunkInput): TextChunk[] {
-  const content = matter(input.content).content.replace(/\r\n/g, "\n").trim();
+  const content = stripFrontmatter(input.content).replace(/\r\n/g, "\n").trim();
   if (content.length === 0) {
     return [];
   }
@@ -39,7 +39,7 @@ export function chunkMarkdown(input: ChunkInput): TextChunk[] {
 }
 
 export function chunkText(input: ChunkInput): TextChunk[] {
-  const content = input.stripFrontmatter === true ? matter(input.content).content : input.content;
+  const content = input.stripFrontmatter === true ? stripFrontmatter(input.content) : input.content;
   const text = content.replace(/\r\n/g, "\n").trim();
   if (text.length === 0) {
     return [];
@@ -55,7 +55,7 @@ export function chunkText(input: ChunkInput): TextChunk[] {
 }
 
 export function chunkSentences(input: ChunkInput): TextChunk[] {
-  const content = input.stripFrontmatter === true ? matter(input.content).content : input.content;
+  const content = input.stripFrontmatter === true ? stripFrontmatter(input.content) : input.content;
   const text = content.replace(/\r\n/g, "\n").trim();
   if (text.length === 0) {
     return [];
@@ -202,4 +202,12 @@ function findChunkEnd(text: string, start: number, maxChars: number): number {
 
 export function chunkId(source: string, index: number): string {
   return crypto.createHash("sha256").update(`${source}:${index}`).digest("hex").slice(0, 24);
+}
+
+function stripFrontmatter(content: string): string {
+  try {
+    return matter(content).content;
+  } catch {
+    return content;
+  }
 }

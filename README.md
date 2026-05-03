@@ -20,6 +20,7 @@ npm install
 npm run typecheck
 npm test
 npm run build
+npm run bench:projects -- --roots D:\Work --limit 3 --variants hash,minilm
 npm run release:preflight
 npm run smoke:pack
 npm run smoke:install
@@ -59,6 +60,8 @@ kbx model use
 ```
 
 Supported ingest inputs include Markdown, plain text, PDF, DOCX, PPTX, XLSX, EPUB, images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.tif`, `.tiff`, `.bmp`), common source-code files, and structured text formats such as JSON, YAML, TOML, XML, SQL, HTML, and CSS.
+
+Ingest respects `.gitignore` plus an optional root `.kbxignore` file. Use `.kbxignore` for files that should stay in the repo but not become searchable context, such as large dumps, screenshots, generated declarations, or exported artifacts.
 
 Image ingest indexes embedded PNG text metadata and can run OCR when `tesseract` is available. To plug in a different OCR engine, set `KBX_OCR_COMMAND` to a command that writes extracted text to stdout; use `{file}` as the image path placeholder:
 
@@ -175,6 +178,7 @@ Implemented:
 - explicit retention-bound session memory source under `.kbx/sessions`
 - PDF and DOCX text extraction during ingest
 - ingest policy overrides with `--include`, `--exclude`, and `--no-gitignore`
+- root `.kbxignore` support in addition to `.gitignore`
 - heading-aware Markdown, fixed text/code, and sentence chunking
 - Zvec-backed local vector collection
 - hybrid vector and SQLite FTS5 lexical retrieval
@@ -191,6 +195,7 @@ Implemented:
 - Claude Code hook adapter for refreshing kbx after Write/Edit/MultiEdit
 - CI and npm release workflow with package dry-run validation, install smoke test, and npm provenance publishing
 - conservative default secret/key/env-file exclusions during ingest
+- generated-file exclusions and local project benchmark tooling
 - example retrieval eval corpus
 
 Non-goals:
