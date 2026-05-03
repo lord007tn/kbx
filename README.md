@@ -1,16 +1,31 @@
 # kbx
 
-`kbx` is a local-first knowledge base CLI for making workspace files searchable by AI assistants.
+`kbx` is a local-first knowledge base CLI that makes workspace files searchable by AI assistants.
 
-It stores workspace data under `.kbx/`, runs locally, and exposes retrieval through both CLI commands and a stdio MCP server.
-Downloaded or offline-loaded model files are cached under the user-level kbx directory.
+It stores workspace data under `.kbx/`, runs locally, and exposes retrieval through CLI commands and a stdio MCP server. Downloaded or offline-loaded model files are cached under the user-level kbx directory.
+
+`kbx` is alpha software. The core CLI and MCP retrieval flow are usable, but the public package is still early and may change before a stable v1.
 
 ## Install
 
 ```bash
 npx -y kbx --help
-npx -y kbx init
+npx -y kbx init --model minilm
 npx -y kbx ingest
+npx -y kbx search "your query"
+```
+
+Requires Node.js `>=20.19.0`. The npm/npx package is the supported distribution path for this alpha.
+
+## Quick Smoke Test
+
+From a workspace you want to index:
+
+```bash
+npx -y kbx init --model minilm
+npx -y kbx ingest
+npx -y kbx search "project decisions"
+npx -y kbx doctor
 ```
 
 ## Development
@@ -76,6 +91,15 @@ External paths are rejected unless explicitly snapshotted into the workspace:
 ```bash
 kbx ingest C:\Users\you\notes --allow-external
 ```
+
+## Alpha Limitations
+
+- Distribution is npm/npx only; standalone binaries, signed platform archives, and Homebrew are not part of this alpha.
+- Embeddings run on CPU. GPU acceleration is not selected automatically.
+- `kbx` retrieves cited chunks; it does not generate answers, run chat, or act as an LLM.
+- The first real embedding run may download model files unless you choose an already cached or offline-loaded model.
+- Supported platforms depend on published `@zvec/zvec` Node bindings. Windows ARM and macOS Intel are not covered by the current alpha support target.
+- Image OCR requires `tesseract` or a configured `KBX_OCR_COMMAND`; otherwise image ingest is limited to extractable metadata/text.
 
 ## MCP
 
@@ -155,6 +179,8 @@ A tiny example corpus lives under `examples/retrieval-eval/`.
 
 `kbx` is distributed as an npm CLI and is intended to run directly through `npx -y kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with provenance, and creates a Conventional Commits changelog release with `changelogithub`.
 
+Public releases start at `v0.1.0`. The package version, `src/version.ts`, and Git tag must match exactly before a release tag is pushed.
+
 Destructive MCP tools are disabled by default. Enable them only when you want agents to perform delete/reset operations:
 
 ```bash
@@ -165,7 +191,7 @@ See [docs/agent-usage.md](docs/agent-usage.md) for Claude/Codex/Cursor style usa
 
 ## Current Scope
 
-This is pre-release alpha scope. The CLI is usable through npm/npx for local development, smoke testing, and release preflight checks.
+This is alpha scope. The CLI is usable through npm/npx for local development, smoke testing, and MCP-backed retrieval workflows.
 
 Implemented:
 
