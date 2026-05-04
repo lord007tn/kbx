@@ -1,6 +1,6 @@
 # kbx Implementation Status
 
-Last reviewed: May 1, 2026
+Last reviewed: May 4, 2026
 
 This document records what is already present in the current `kbx` codebase so the PRD can distinguish shipped foundation from planned expansion.
 

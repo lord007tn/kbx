@@ -56,6 +56,7 @@ kbx init --model minilm
 kbx init --git-root --model nomic
 kbx ingest
 kbx ingest docs --include "**/*.md" --exclude "drafts/**" --no-gitignore
+kbx ingest docs --watch
 kbx search "workspace registry"
 kbx search "workspace registry" --fresh
 kbx search "workspace registry" --global
@@ -155,7 +156,7 @@ Tools exposed:
 - `kbx_mcp_config`
 - gated destructive tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, `kbx_delete_workspace_kb`
 
-`kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. It opportunistically refreshes changed indexed content when the change count is small; use `kbx_refresh_index` or `kbx watch` for larger updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes a `kbx_usage` prompt and `kbx://usage` resource with agent guidance.
+`kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. It opportunistically refreshes changed indexed content when the change count is small, so the search tools are not advertised as read-only to MCP clients. Use `kbx_refresh_index` or `kbx watch` for larger updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes a `kbx_usage` prompt and `kbx://usage` resource with agent guidance.
 
 Search uses deterministic hybrid retrieval by default. Optional model or LLM reranking can be layered in with an external command:
 

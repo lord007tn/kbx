@@ -4,7 +4,10 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ingestSource } from "../src/indexer";
 import { writeJson } from "../src/io";
@@ -13,6 +16,8 @@ import { SCHEMA_VERSION, type SourceEntry, type WorkspaceConfig, type WorkspaceM
 import { defaultConfig, workspaceFromRoot } from "../src/workspace";
 
 const exec = promisify(execFile);
+const cliPath = path.resolve("src", "cli.ts");
+const tsxLoaderUrl = pathToFileURL(path.resolve("node_modules", "tsx", "dist", "loader.mjs")).href;
 
 type ToolHandler = (input: Record<string, unknown>) => Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }>;
 
@@ -51,6 +56,50 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
   ].sort());
   assert.equal(server.toolConfigs.get("kbx_search")?.annotations?.readOnlyHint, false);
   assert.equal(server.toolConfigs.get("kbx_search_many")?.annotations?.readOnlyHint, false);
+});
+
+test("kbx mcp stdio supports search and reports validation errors", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-stdio-");
+  const client = new Client({ name: "kbx-test-client", version: "1.0.0" });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["--import", tsxLoaderUrl, cliPath, "mcp"],
+    cwd: fixture.root,
+    env: childEnv({
+      KBX_EMBEDDER: "hash",
+      KBX_HOME: path.join(fixture.root, ".home"),
+      KBX_MODEL_CACHE: path.join(fixture.root, ".models")
+    })
+  });
+  try {
+    await client.connect(transport);
+
+    const tools = await client.listTools();
+    const searchResponse = await client.callTool({
+      name: "kbx_search",
+      arguments: {
+        query: "alpha token",
+        top_k: 1
+      }
+    });
+    const body = JSON.parse(toolText(searchResponse)) as {
+      results: Array<{ source: string }>;
+    };
+    const blankResponse = await client.callTool({
+      name: "kbx_search",
+      arguments: {
+        query: "   "
+      }
+    });
+
+    assert.equal(tools.tools.some((tool) => tool.name === "kbx_search"), true);
+    assert.equal(body.results[0]?.source, "alpha.md");
+    assert.equal(blankResponse.isError, true);
+    assert.match(toolText(blankResponse), /Input validation error|too_small/);
+  } finally {
+    await client.close();
+    await fixture.cleanup();
+  }
 });
 
 test("kbx_search_many returns separate result groups", async () => {
@@ -319,4 +368,23 @@ async function git(cwd: string, args: string[]): Promise<void> {
 
 async function waitForMtimeTick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+function childEnv(extra: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  return {
+    ...env,
+    ...extra
+  };
+}
+
+function toolText(result: unknown): string {
+  const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+  const first = content?.[0];
+  return first?.type === "text" ? first.text ?? "" : "";
 }

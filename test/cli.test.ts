@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -109,6 +109,33 @@ test("CLI labels skipped non-text files without calling them only unchanged", as
   }
 });
 
+test("CLI ingest path watch mode stays scoped to the requested target", async () => {
+  const fixture = await createFixture("kbx-cli-watch-target-");
+  try {
+    await mkdir(path.join(fixture.workspace, "docs"), { recursive: true });
+    await writeFile(path.join(fixture.workspace, "root.md"), "# Root\n\nroot watch token\n", "utf8");
+    await writeFile(path.join(fixture.workspace, "docs", "note.md"), "# Note\n\ndocs watch token\n", "utf8");
+    await runCli(fixture, ["init", "--here", "--model", "minilm"]);
+    await runCli(fixture, ["ingest"]);
+
+    const watcher = spawnCli(fixture, ["ingest", "docs", "--watch"]);
+    try {
+      assert.equal(await waitForOutput(watcher, /Watching 1 path\(s\)/), true);
+
+      await writeFile(path.join(fixture.workspace, "root.md"), "# Root\n\nroot outside watch token\n", "utf8");
+      await sleep(1200);
+      assert.doesNotMatch(watcher.output(), /Refreshed/);
+
+      await writeFile(path.join(fixture.workspace, "docs", "note.md"), "# Note\n\ndocs inside watch token\n", "utf8");
+      assert.equal(await waitForOutput(watcher, /Refreshed/), true);
+    } finally {
+      await watcher.close();
+    }
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 interface Fixture {
   root: string;
   workspace: string;
@@ -162,6 +189,50 @@ async function runCliExpectFailure(fixture: Fixture, args: string[]): Promise<Cl
       stderr: failure.stderr ?? ""
     };
   }
+}
+
+function spawnCli(fixture: Fixture, args: string[]) {
+  const child = spawn(process.execPath, ["--import", tsxLoaderUrl, cliPath, ...args], {
+    cwd: fixture.workspace,
+    env: cliEnv(fixture),
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  let output = "";
+  child.stdout.on("data", (data) => {
+    output += data.toString();
+  });
+  child.stderr.on("data", (data) => {
+    output += data.toString();
+  });
+  return {
+    output: () => output,
+    close: async () => {
+      if (child.exitCode !== null) {
+        return;
+      }
+      child.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => child.once("close", resolve)),
+        sleep(3000)
+      ]);
+    }
+  };
+}
+
+async function waitForOutput(watcher: { output: () => string }, pattern: RegExp, timeoutMs = 8000): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (pattern.test(watcher.output())) {
+      return true;
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function cliEnv(fixture: Fixture): NodeJS.ProcessEnv {
