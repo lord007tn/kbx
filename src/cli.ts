@@ -136,7 +136,7 @@ Notes:
       ingestProgress?.error();
       throw error;
     }
-    console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
+    console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} skipped/unchanged file(s), ${result.deleted} deleted file(s).`);
 
     if (options.watch === true) {
       await watchIngest(workspace);
@@ -197,7 +197,7 @@ Model or LLM reranking is optional and off by default.
     if (options.fresh === true) {
       const freshness = await refreshWorkspaceFreshness(workspace);
       if (freshness.refreshed && freshness.refresh) {
-        console.error(`Refreshed ${freshness.refresh.files} file(s), ${freshness.refresh.chunks} new chunk(s), ${freshness.refresh.skipped} unchanged, ${freshness.refresh.deleted} deleted.`);
+        console.error(`Refreshed ${freshness.refresh.files} file(s), ${freshness.refresh.chunks} new chunk(s), ${freshness.refresh.skipped} skipped/unchanged, ${freshness.refresh.deleted} deleted.`);
       }
     }
 
@@ -721,7 +721,7 @@ Examples:
         throw new Error("No kbx workspace found. Run kbx init first.");
       }
       const repair = await refreshWorkspaceIndex(workspace);
-      console.log(`repair  refreshed ${repair.files} file(s), ${repair.chunks} new chunk(s), ${repair.skipped} unchanged, ${repair.deleted} deleted across ${repair.sources} source(s).`);
+      console.log(`repair  refreshed ${repair.files} file(s), ${repair.chunks} new chunk(s), ${repair.skipped} skipped/unchanged, ${repair.deleted} deleted across ${repair.sources} source(s).`);
     }
     const lines = await runDoctor(workspace, {
       fresh: options.fresh === true || options.deep === true || options.repair === true,
@@ -1055,11 +1055,11 @@ function createIngestProgress(): CliIngestProgress | undefined {
 
 function ingestProgressMessage(event: Extract<IngestProgressEvent, { phase: "file" }>): string {
   const changed = event.processedFiles - event.skippedFiles;
-  return `Indexing ${event.processedFiles}/${event.totalFiles} file(s), ${changed} changed, ${event.skippedFiles} unchanged`;
+  return `Indexing ${event.processedFiles}/${event.totalFiles} file(s), ${changed} changed, ${event.skippedFiles} skipped/unchanged`;
 }
 
 function ingestCompleteMessage(event: Extract<IngestProgressEvent, { phase: "complete" }>): string {
-  return `Indexed ${event.totalFiles} file(s), ${event.insertedChunks} new chunk(s), ${event.skippedFiles} unchanged.`;
+  return `Indexed ${event.totalFiles} file(s), ${event.insertedChunks} new chunk(s), ${event.skippedFiles} skipped/unchanged.`;
 }
 
 function shortPath(value: string): string {
@@ -1067,7 +1067,7 @@ function shortPath(value: string): string {
   if (relative === "") {
     return ".";
   }
-  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+  if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
     return relative;
   }
   return value;
@@ -1221,8 +1221,9 @@ async function confirmAction(message: string): Promise<boolean> {
 }
 
 function parsePositiveInteger(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const trimmed = value.trim();
+  const parsed = /^(0|[1-9]\d*)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error("Expected a positive integer");
   }
   return parsed;

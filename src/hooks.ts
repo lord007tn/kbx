@@ -134,5 +134,5 @@ function hookContext(message: string): unknown {
 
 function toWorkspaceDisplayPath(workspaceRoot: string, filePath: string): string {
   const relative = path.relative(workspaceRoot, path.resolve(workspaceRoot, filePath)).replaceAll("\\", "/");
-  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : filePath;
+  return relative && relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative) ? relative : filePath;
 }

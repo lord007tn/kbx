@@ -235,6 +235,25 @@ async function ingestSourceDirect(workspace: Workspace, source: SourceEntry, opt
 
       const contentHash = hashContent(content);
       const chunks = chunksForFile(source, file.relativePath, fileKey, file.extension, file.mtime, content, config, branch);
+      if (chunks.length === 0) {
+        delete stats.files[fileKey];
+        if (hadExistingFile) {
+          deleted += 1;
+        } else {
+          skipped += 1;
+        }
+        await options.onProgress?.({
+          phase: "file",
+          source: source.path,
+          file: file.relativePath,
+          processedFiles: index + 1,
+          totalFiles: files.length,
+          insertedChunks,
+          skippedFiles: skipped,
+          deletedFiles: deleted
+        });
+        continue;
+      }
 
       insertedChunks += await embedAndUpsert(store, embedder, chunks);
       lexical.upsertChunks(chunks);
@@ -578,7 +597,7 @@ export async function refreshWorkspaceFreshness(
 export async function refreshWorkspaceFile(workspace: Workspace, targetPath: string): Promise<RefreshResult> {
   const absoluteTarget = path.resolve(workspace.root, targetPath);
   const relativePath = path.relative(workspace.root, absoluteTarget).replaceAll("\\", "/");
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+  if (!isWorkspaceRelativePath(relativePath)) {
     throw new Error("Refresh target must be inside the initialized workspace.");
   }
 
@@ -920,6 +939,10 @@ function isKbxSession(filePath: string): boolean {
 
 function isManagedKbxContent(filePath: string): boolean {
   return isKbxImport(filePath) || isKbxSession(filePath);
+}
+
+function isWorkspaceRelativePath(relativePath: string): boolean {
+  return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith("../") && !path.isAbsolute(relativePath));
 }
 
 function isMissingFileError(error: unknown): boolean {

@@ -98,17 +98,25 @@ function assertKnownUserKey(key: string): void {
 }
 
 function parsePositiveInteger(value: string, key: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const parsed = parseIntegerLiteral(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`${key} must be a positive integer`);
   }
   return parsed;
 }
 
 function parseNonNegativeInteger(value: string, key: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const parsed = parseIntegerLiteral(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`${key} must be a non-negative integer`);
   }
   return parsed;
+}
+
+function parseIntegerLiteral(value: string): number {
+  const trimmed = value.trim();
+  if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
 }

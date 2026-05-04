@@ -92,6 +92,38 @@ test("ingestWorkspaceTarget leaves index and sources untouched when a file fails
   }
 });
 
+test("ingestSource does not keep zero-chunk files in stats", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-ingest-empty-file-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "note.md"), "", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    await writeJson(workspace.sourcesPath, [source]);
+
+    const emptyResult = await ingestSource(workspace, source);
+    assert.equal(emptyResult.skipped, 1);
+    assert.deepEqual((await loadIndexStats(workspace, "old-model", 3)).files, {});
+
+    await writeFile(path.join(root, "note.md"), "# Note\n\nempty file regression token\n", "utf8");
+    const indexedResult = await ingestSource(workspace, source);
+    assert.equal(indexedResult.chunks, 1);
+    assert.equal(Object.keys((await loadIndexStats(workspace, "old-model", 3)).files).length, 1);
+
+    await writeFile(path.join(root, "note.md"), "", "utf8");
+    const removedResult = await ingestSource(workspace, source);
+    assert.equal(removedResult.deleted, 1);
+    assert.deepEqual((await loadIndexStats(workspace, "old-model", 3)).files, {});
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("removeSource can delete an external import snapshot", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-remove-import-"));
   const previousEmbedder = process.env.KBX_EMBEDDER;

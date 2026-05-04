@@ -24,6 +24,13 @@ test("sourceForTarget records ingest policy overrides", () => {
   assert.equal(source.no_gitignore, true);
 });
 
+test("sourceForTarget accepts workspace paths whose name starts with two dots", () => {
+  const root = path.resolve("workspace");
+  const source = sourceForTarget(root, path.join(root, "..notes"));
+
+  assert.equal(source.path, "..notes");
+});
+
 test("normalizeSources keeps broader roots over covered children", () => {
   const normalized = normalizeSources([
     { path: "docs", kind: "workspace", include: [], exclude: [] },
@@ -63,6 +70,22 @@ test("normalizeSources keeps session memory separate from workspace root", () =>
   ]);
 
   assert.deepEqual(normalized.map((source) => source.path), [".", ".kbx/sessions"]);
+});
+
+test("sourceForIngestTarget accepts workspace paths whose name starts with two dots", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-workspace-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await mkdir(path.join(root, "..notes"), { recursive: true });
+    await writeFile(path.join(root, "..notes", "note.md"), "# Notes\n", "utf8");
+
+    const source = await sourceForIngestTarget(workspace, path.join(root, "..notes"));
+    assert.equal(source.kind, "workspace");
+    assert.equal(source.path, "..notes");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("coversSource recognizes nested workspace paths", () => {

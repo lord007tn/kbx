@@ -72,6 +72,43 @@ test("CLI destructive paths require confirmation or explicit --yes", async () =>
   }
 });
 
+test("CLI rejects positive integer options with trailing junk", async () => {
+  const fixture = await createFixture("kbx-cli-integer-options-");
+  try {
+    await writeFile(path.join(fixture.workspace, "notes.md"), "# Notes\n\nInteger parser token.\n", "utf8");
+    await runCli(fixture, ["init", "--here", "--model", "minilm"]);
+    await runCli(fixture, ["ingest"]);
+
+    const badTopK = await runCliExpectFailure(fixture, ["search", "integer", "-k", "2abc"]);
+    assert.equal(badTopK.code, 1);
+    assert.match(badTopK.stderr, /Expected a positive integer/);
+
+    const badMemoryRetention = await runCliExpectFailure(fixture, ["memory", "add", "bad memory", "--retention-days", "30abc"]);
+    assert.equal(badMemoryRetention.code, 1);
+    assert.match(badMemoryRetention.stderr, /Expected a positive integer/);
+
+    const badConfigValue = await runCliExpectFailure(fixture, ["config", "set", "chunk.size", "1200abc"]);
+    assert.equal(badConfigValue.code, 1);
+    assert.match(badConfigValue.stderr, /positive integer/);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("CLI labels skipped non-text files without calling them only unchanged", async () => {
+  const fixture = await createFixture("kbx-cli-skip-label-");
+  try {
+    await writeFile(path.join(fixture.workspace, "binary.txt"), Buffer.from([0, 159, 146, 150, 0, 1]));
+    await runCli(fixture, ["init", "--here", "--model", "minilm"]);
+
+    const ingest = await runCli(fixture, ["ingest"]);
+    assert.match(ingest.stdout, /1 skipped\/unchanged file\(s\)/);
+    assert.doesNotMatch(ingest.stdout, /1 unchanged file\(s\)/);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 interface Fixture {
   root: string;
   workspace: string;
