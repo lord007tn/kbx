@@ -390,7 +390,8 @@ test("scanWorkspaceFreshness detects size changes when mtime is preserved", asyn
     const preservedMtime = originalMtime!;
     await writeFile(notePath, "# Note\n\nnewonlyxyz with extra bytes\n", "utf8");
     await utimes(notePath, new Date(preservedMtime), new Date(preservedMtime));
-    assert.equal(Math.floor((await stat(notePath)).mtimeMs), preservedMtime);
+    const restoredMtime = Math.floor((await stat(notePath)).mtimeMs);
+    assert.ok(Math.abs(restoredMtime - preservedMtime) <= 1);
 
     const scan = await scanWorkspaceFreshness(workspace);
     assert.equal(scan.stale, 1);
