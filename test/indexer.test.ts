@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ingestSource, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, removeSource, resetWorkspaceIndex, scanWorkspaceFreshness, type IngestProgressEvent } from "../src/indexer";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, removeSource, resetWorkspaceIndex, scanWorkspaceFreshness, type IngestProgressEvent } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { LexicalIndexStore } from "../src/lexical-index";
 import { SCHEMA_VERSION, type SourceEntry, type WorkspaceManifest } from "../src/types";
 import { ChunkVectorStore } from "../src/vector-store";
-import { defaultConfig, loadManifest, workspaceFromRoot } from "../src/workspace";
+import { defaultConfig, loadManifest, loadSources, workspaceFromRoot } from "../src/workspace";
 
 test("rebuildWorkspaceIndexForModel swaps in a rebuilt index after success", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-rebuild-success-"));
@@ -60,6 +60,32 @@ test("rebuildWorkspaceIndexForModel leaves the old manifest when rebuild fails",
 
     assert.equal((await loadManifest(workspace)).model, "old-model");
     assert.equal((await loadIndexStats(workspace, "old-model", 3)).dim, 3);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ingestWorkspaceTarget leaves index and sources untouched when a file fails", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-ingest-atomic-fail-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "good.md"), "# Good\n\natomic success should not leak\n", "utf8");
+    await writeFile(path.join(root, "zz-bad.pdf"), "not a valid pdf", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    await writeJson(workspace.sourcesPath, []);
+
+    await assert.rejects(() => ingestWorkspaceTarget(workspace, root));
+
+    const stats = await loadIndexStats(workspace, "old-model", 3);
+    assert.deepEqual(stats.files, {});
+    assert.deepEqual(await loadSources(workspace), []);
+    await assert.rejects(() => ChunkVectorStore.open(workspace, 3, { readOnly: true }));
+    await assert.rejects(() => LexicalIndexStore.open(workspace, { readOnly: true }));
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });
@@ -337,6 +363,47 @@ test("scanWorkspaceFreshness and refreshWorkspaceFreshness track indexed file ch
       deleted: 0,
       newFiles: 0
     });
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("scanWorkspaceFreshness detects size changes when mtime is preserved", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-freshness-size-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const notePath = path.join(root, "note.md");
+    await writeFile(notePath, "# Note\n\noldonlyabc\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+    await ingestSource(workspace, source);
+
+    const originalStats = await loadIndexStats(workspace, "old-model", 3);
+    const originalMtime = originalStats.files["note.md"]?.mtime;
+    assert.notEqual(originalMtime, undefined);
+    const preservedMtime = originalMtime!;
+    await writeFile(notePath, "# Note\n\nnewonlyxyz with extra bytes\n", "utf8");
+    await utimes(notePath, new Date(preservedMtime), new Date(preservedMtime));
+    assert.equal(Math.floor((await stat(notePath)).mtimeMs), preservedMtime);
+
+    const scan = await scanWorkspaceFreshness(workspace);
+    assert.equal(scan.stale, 1);
+
+    const result = await ingestSource(workspace, source);
+    assert.equal(result.skipped, 0);
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    const oldHits = lexical.search("oldonlyabc", 5);
+    const newHits = lexical.search("newonlyxyz", 5);
+    await lexical.close();
+
+    assert.equal(oldHits.length, 0);
+    assert.equal(newHits[0]?.source, "note.md");
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });

@@ -87,6 +87,7 @@ export interface EmbeddedChunkRecord extends ChunkRecord {
 
 export interface IndexedFileStats {
   mtime: number;
+  size?: number;
   chunks: number;
   relative_path?: string;
   branch_scope?: string;

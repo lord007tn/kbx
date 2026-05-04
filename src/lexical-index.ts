@@ -40,12 +40,24 @@ export class LexicalIndexStore {
   ) {}
 
   static async open(workspace: Workspace, options: { readOnly?: boolean } = {}): Promise<LexicalIndexStore> {
-    mkdirSync(workspace.kbxDir, { recursive: true });
-    const db = new Database(workspace.lexicalPath);
-    db.pragma("journal_mode = DELETE");
+    const readOnly = options.readOnly === true;
+    if (!readOnly) {
+      mkdirSync(workspace.kbxDir, { recursive: true });
+    }
+    const db = readOnly
+      ? new Database(workspace.lexicalPath, { readonly: true, fileMustExist: true })
+      : new Database(workspace.lexicalPath);
+    if (!readOnly) {
+      db.pragma("journal_mode = DELETE");
+    }
     db.pragma("foreign_keys = ON");
 
-    const store = new LexicalIndexStore(db, options.readOnly === true);
+    const store = new LexicalIndexStore(db, readOnly);
+    if (store.readOnly) {
+      store.assertReadableSchema();
+      return store;
+    }
+
     store.migrate();
     if (!store.readOnly) {
       await store.migrateLegacyJson(workspace);
@@ -256,6 +268,16 @@ export class LexicalIndexStore {
       PRAGMA user_version = ${LEXICAL_SCHEMA_VERSION};
     `);
     this.ensureContentIdColumn();
+  }
+
+  private assertReadableSchema(): void {
+    const userVersion = (this.db.pragma("user_version", { simple: true }) as number) ?? 0;
+    if (userVersion > LEXICAL_SCHEMA_VERSION) {
+      throw new Error(`Unsupported lexical index schema ${userVersion}. Upgrade kbx to read this workspace.`);
+    }
+    if (userVersion < LEXICAL_SCHEMA_VERSION) {
+      throw new Error(`Lexical index schema ${userVersion || "missing"} is outdated. Re-run kbx ingest to repair it.`);
+    }
   }
 
   private async migrateLegacyJson(workspace: Workspace): Promise<void> {

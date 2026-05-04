@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { TextDecoder } from "node:util";
 import JSZip from "jszip";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
@@ -7,6 +8,18 @@ import { extractImageText, isImageExtension } from "./ocr";
 
 const PDF_MAX_PAGES = 200;
 const DOCUMENT_EXTENSIONS = new Set([".pdf", ".docx", ".pptx", ".xlsx", ".epub"]);
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
+export class NonTextContentError extends Error {
+  constructor(filePath: string) {
+    super(`${filePath} does not look like UTF-8 text`);
+    this.name = "NonTextContentError";
+  }
+}
+
+export function isNonTextContentError(error: unknown): error is NonTextContentError {
+  return error instanceof NonTextContentError;
+}
 
 export function isDocumentExtension(extension: string): boolean {
   return DOCUMENT_EXTENSIONS.has(extension) || isImageExtension(extension);
@@ -31,7 +44,21 @@ export async function extractIndexableText(filePath: string, extension: string):
   if (extension === ".epub") {
     return extractEpubText(filePath);
   }
-  return readFile(filePath, "utf8");
+  return readUtf8TextFile(filePath);
+}
+
+async function readUtf8TextFile(filePath: string): Promise<string> {
+  const data = await readFile(filePath);
+  let text: string;
+  try {
+    text = utf8Decoder.decode(data);
+  } catch {
+    throw new NonTextContentError(filePath);
+  }
+  if (hasBinaryControlCharacters(text)) {
+    throw new NonTextContentError(filePath);
+  }
+  return text;
 }
 
 async function extractPdfText(filePath: string): Promise<string> {
@@ -307,4 +334,14 @@ function normalizeExtractedText(value: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function hasBinaryControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 12 && code !== 13) {
+      return true;
+    }
+  }
+  return false;
 }

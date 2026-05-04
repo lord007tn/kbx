@@ -46,13 +46,14 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
     {
       description: "Search the user's local kbx knowledge base. Returns previews and chunk IDs; call kbx_get_chunk for full text.",
       inputSchema: {
-        query: z.string().min(1).describe("Search query"),
+        query: z.string().trim().min(1).describe("Search query"),
         top_k: z.number().int().min(1).max(50).optional().describe("Number of chunks to return"),
         preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
         include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer kbx_get_chunk unless full text is explicitly needed.")
       },
       annotations: {
-        readOnlyHint: true,
+        readOnlyHint: false,
+        destructiveHint: false,
         openWorldHint: false
       }
     },
@@ -83,13 +84,14 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
     {
       description: "Run multiple kbx searches in one call. Use for broad discovery without repeated MCP round trips.",
       inputSchema: {
-        queries: z.array(z.string().min(1)).min(1).max(10).describe("Search queries"),
+        queries: z.array(z.string().trim().min(1)).min(1).max(10).describe("Search queries"),
         top_k: z.number().int().min(1).max(20).optional().describe("Results per query"),
         preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
         include_text: z.boolean().optional().describe("Include full chunk text in results. Prefer false unless explicitly needed.")
       },
       annotations: {
-        readOnlyHint: true,
+        readOnlyHint: false,
+        destructiveHint: false,
         openWorldHint: false
       }
     },
@@ -125,7 +127,7 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
     {
       description: "Search across all registered local kbx workspaces. Returns workspace-qualified previews and chunk IDs.",
       inputSchema: {
-        query: z.string().min(1).describe("Search query"),
+        query: z.string().trim().min(1).describe("Search query"),
         top_k: z.number().int().min(1).max(50).optional().describe("Number of chunks to return"),
         preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
         include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer kbx_get_chunk in the owning workspace unless full text is explicitly needed.")

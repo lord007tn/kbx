@@ -18,8 +18,10 @@ type ToolHandler = (input: Record<string, unknown>) => Promise<{ content: Array<
 
 class FakeMcpServer {
   tools = new Map<string, ToolHandler>();
+  toolConfigs = new Map<string, { annotations?: Record<string, unknown> }>();
 
-  registerTool(name: string, _config: unknown, handler: ToolHandler): void {
+  registerTool(name: string, config: { annotations?: Record<string, unknown> }, handler: ToolHandler): void {
+    this.toolConfigs.set(name, config);
     this.tools.set(name, handler);
   }
 }
@@ -47,6 +49,8 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
     "kbx_search_many",
     "kbx_watch_status"
   ].sort());
+  assert.equal(server.toolConfigs.get("kbx_search")?.annotations?.readOnlyHint, false);
+  assert.equal(server.toolConfigs.get("kbx_search_many")?.annotations?.readOnlyHint, false);
 });
 
 test("kbx_search_many returns separate result groups", async () => {

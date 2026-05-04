@@ -15,6 +15,31 @@ import { defaultConfig, workspaceFromRoot } from "../src/workspace";
 
 const exec = promisify(execFile);
 
+test("searchWorkspace rejects empty or whitespace queries", async () => {
+  await assert.rejects(
+    () => searchWorkspace(workspaceFromRoot(path.resolve("unused")), "   ", 3),
+    /Search query must not be empty/
+  );
+});
+
+test("searchWorkspace reports a friendly error before first ingest", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-search-no-index-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    await writeJson(workspace.sourcesPath, []);
+
+    await assert.rejects(
+      () => searchWorkspace(workspace, "anything", 3),
+      /No index yet; run kbx ingest/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("searchWorkspace includes lexical matches for exact symbols", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-search-"));
   const previousEmbedder = process.env.KBX_EMBEDDER;

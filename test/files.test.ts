@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -142,6 +142,42 @@ test("listIndexableFiles applies root kbxignore in addition to gitignore", async
     assert.deepEqual(files.map((file) => file.relativePath), ["docs/keep.md"]);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listIndexableFiles applies nested gitignore files", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));
+  try {
+    await mkdir(path.join(root, "docs"), { recursive: true });
+    await writeFile(path.join(root, "docs", ".gitignore"), "private.md\n", "utf8");
+    await writeFile(path.join(root, "docs", "public.md"), "# Public\n", "utf8");
+    await writeFile(path.join(root, "docs", "private.md"), "# Private\n", "utf8");
+
+    const files = await listIndexableFiles(root, ".");
+    assert.deepEqual(files.map((file) => file.relativePath), ["docs/public.md"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listIndexableFiles does not follow symlinks outside the workspace", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));
+  const external = await mkdtemp(path.join(os.tmpdir(), "kbx-files-external-"));
+  try {
+    const linked = path.join(root, "linked");
+    await writeFile(path.join(external, "outside.md"), "# Outside\n", "utf8");
+    try {
+      await symlink(external, linked, "junction");
+    } catch (error) {
+      t.skip(`symlink creation unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+
+    const files = await listIndexableFiles(root, ".");
+    assert.equal(files.some((file) => file.relativePath === "linked/outside.md"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(external, { recursive: true, force: true });
   }
 });
 
