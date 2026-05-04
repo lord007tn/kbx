@@ -188,7 +188,7 @@ export async function benchmarkLine(model: string, dim: number): Promise<DoctorL
   const embedder = createEmbedder(model, dim);
   const samples = [
     "kbx indexes local files for AI knowledge search.",
-    "The MCP server is read-only in v1.",
+    "The MCP server exposes search, refresh, and gated maintenance tools.",
     "Workspace knowledge bases live under .kbx.",
     "Search retrieves chunks and citations.",
     "CPU embeddings are the default execution mode."

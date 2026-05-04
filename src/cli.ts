@@ -139,7 +139,7 @@ Notes:
     console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} skipped/unchanged file(s), ${result.deleted} deleted file(s).`);
 
     if (options.watch === true) {
-      await watchIngest(workspace);
+      await watchIngest(workspace, absoluteTarget);
     }
   });
 
@@ -241,7 +241,7 @@ This is equivalent to a long-running hot ingest loop. Press Ctrl+C to stop.
 const mcpCommand = program
   .command("mcp")
   .description("Run the MCP server over stdio.")
-  .summary("Expose read-only kbx search tools to MCP clients.")
+  .summary("Expose kbx search, refresh, and gated maintenance tools to MCP clients.")
   .addHelpText("after", `
 
 Example MCP config:
