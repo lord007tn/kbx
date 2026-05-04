@@ -26,9 +26,13 @@ export interface GlobalSearchHit extends SearchHit {
 }
 
 export async function searchWorkspace(workspace: Workspace, query: string, topK: number, options: SearchWorkspaceOptions = {}): Promise<SearchHit[]> {
+  assertSearchQuery(query);
   const manifest = await loadManifest(workspace);
   const branch = await currentBranchContext(workspace.root);
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+  if (!stats.last_ingest_at && Object.keys(stats.files).length === 0) {
+    throw new Error("No index yet; run kbx ingest.");
+  }
   const branchScope = branch?.scope;
   const filterToBranch = branchIndexExists(stats.files, branchScope, stats.branches);
   const embedder = createEmbedder(manifest.model, manifest.dim);
@@ -102,6 +106,7 @@ export async function searchRegisteredWorkspaces(
   topK: number,
   options: SearchWorkspaceOptions = {}
 ): Promise<GlobalSearchHit[]> {
+  assertSearchQuery(query);
   const hits: GlobalSearchHit[] = [];
   for (const entry of await loadRegistry()) {
     const workspace = workspaceFromRoot(entry.path);
@@ -130,6 +135,12 @@ export async function searchRegisteredWorkspaces(
   return hits
     .sort((a, b) => b.score - a.score || a.workspace.name.localeCompare(b.workspace.name) || a.local_source.localeCompare(b.local_source))
     .slice(0, topK);
+}
+
+function assertSearchQuery(query: string): void {
+  if (query.trim().length === 0) {
+    throw new Error("Search query must not be empty.");
+  }
 }
 
 async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: SearchHit[], topK: number, options: SearchWorkspaceOptions): Promise<SearchHit[]> {

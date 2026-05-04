@@ -12,6 +12,10 @@ test("config rejects invalid overlap", () => {
   assert.throws(() => setConfigValue(defaultConfig, "chunk.overlap", "800"), /smaller/);
 });
 
+test("config rejects chunk sizes that are not larger than overlap", () => {
+  assert.throws(() => setConfigValue(defaultConfig, "chunk.size", "50"), /larger than chunk\.overlap/);
+});
+
 test("config rejects unknown keys", () => {
   assert.throws(() => getConfigValue(defaultConfig, "unknown.key"), /Unknown config key/);
 });

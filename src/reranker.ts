@@ -28,6 +28,9 @@ const DEFAULT_MODEL_RERANKER = "Xenova/all-MiniLM-L6-v2";
 
 export async function applyOptionalReranker(query: string, hits: SearchHit[], options: RerankerOptions = {}): Promise<SearchHit[]> {
   const mode = options.mode ?? process.env.KBX_RERANKER as RerankerOptions["mode"] ?? "none";
+  if (!isRerankerMode(mode)) {
+    throw new Error(`Unknown reranker mode "${mode}". Supported modes: none, local, model, command.`);
+  }
   if (mode === "none" || hits.length < 2) {
     return hits;
   }
@@ -38,10 +41,6 @@ export async function applyOptionalReranker(query: string, hits: SearchHit[], op
     const scores = await runModelReranker(query, hits, options.model ?? process.env.KBX_RERANK_MODEL ?? DEFAULT_MODEL_RERANKER);
     return sortByScores(hits, scores);
   }
-  if (mode !== "command") {
-    throw new Error(`Unknown reranker mode "${mode}". Supported modes: none, local, model, command.`);
-  }
-
   const command = options.command ?? process.env.KBX_RERANK_COMMAND;
   if (!command) {
     throw new Error("KBX_RERANK_COMMAND is required when reranker mode is command.");
@@ -59,6 +58,10 @@ export async function applyOptionalReranker(query: string, hits: SearchHit[], op
   }, options.timeoutMs);
 
   return sortByScores(hits, scores);
+}
+
+function isRerankerMode(value: unknown): value is NonNullable<RerankerOptions["mode"]> {
+  return value === "none" || value === "local" || value === "model" || value === "command";
 }
 
 export async function runCommandReranker(

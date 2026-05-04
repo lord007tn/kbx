@@ -64,6 +64,13 @@ test("applyOptionalReranker accepts explicit local mode", async () => {
   assert.deepEqual(await applyOptionalReranker("query", hits, { mode: "local" }), hits);
 });
 
+test("applyOptionalReranker rejects unknown modes before checking hit count", async () => {
+  await assert.rejects(
+    () => applyOptionalReranker("query", [hit("a")], { mode: "bogus" as "none" }),
+    /Unknown reranker mode "bogus"/
+  );
+});
+
 test("runModelReranker supports deterministic hash model for tests", async () => {
   const scores = await runModelReranker("target token", [
     { id: "a", source: "a.md", chunk_idx: 0, score: 0.1, text: "unrelated" },

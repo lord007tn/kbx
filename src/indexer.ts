@@ -1,16 +1,16 @@
 import { chunkMarkdown, chunkSentences, chunkText } from "./chunk";
 import { branchContextForSource, indexedRelativePath, isIndexedInBranch, sourceKeyForPath, type BranchContext } from "./branch";
 import { encodeChunkTags } from "./chunk-tags";
-import { extractIndexableText, isDocumentExtension } from "./document-text";
+import { extractIndexableText, isDocumentExtension, isNonTextContentError } from "./document-text";
 import { createEmbedder } from "./embedding";
-import { listIndexableFileEntries } from "./files";
+import { listIndexableFileEntries, type SourceFileEntry } from "./files";
 import { readJson, writeJson } from "./io";
 import { LexicalIndexStore } from "./lexical-index";
 import { loadConfig, loadManifest, loadSources, saveManifest, saveSources, touchManifest, type Workspace } from "./workspace";
 import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources";
-import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexStats, type SourceEntry, type WorkspaceManifest } from "./types";
+import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexedFileStats, type IndexStats, type SourceEntry, type WorkspaceManifest } from "./types";
 import { ChunkVectorStore } from "./vector-store";
-import { access, mkdir, rename, rm } from "node:fs/promises";
+import { access, cp, mkdir, rename, rm } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -69,11 +69,34 @@ export async function ingestWorkspaceTarget(
   await options.onProgress?.({ phase: "prepare", target });
   const source = await sourceForIngestTarget(workspace, target, options);
   const sources = normalizeSources([...existingSources, source]);
-  await saveSources(workspace, sources);
-  return ingestSource(workspace, source, options);
+  return ingestSourceAtomically(workspace, source, options, sources);
 }
 
 export async function ingestSource(workspace: Workspace, source: SourceEntry, options: IngestProgressOptions = {}): Promise<IngestResult> {
+  return ingestSourceAtomically(workspace, source, options);
+}
+
+async function ingestSourceAtomically(
+  workspace: Workspace,
+  source: SourceEntry,
+  options: IngestProgressOptions,
+  nextSources?: SourceEntry[]
+): Promise<IngestResult> {
+  const tempWorkspace = await prepareTemporaryIndexWorkspace(workspace);
+  try {
+    if (nextSources) {
+      await writeJson(tempWorkspace.sourcesPath, nextSources);
+    }
+    const result = await ingestSourceDirect(tempWorkspace, source, options);
+    await swapIngestedIndex(workspace, tempWorkspace, { includeSources: nextSources !== undefined });
+    await touchManifest(workspace);
+    return result;
+  } finally {
+    await rm(tempWorkspace.kbxDir, { recursive: true, force: true });
+  }
+}
+
+async function ingestSourceDirect(workspace: Workspace, source: SourceEntry, options: IngestProgressOptions = {}): Promise<IngestResult> {
   const [manifest, config] = await Promise.all([
     loadManifest(workspace),
     loadConfig(workspace)
@@ -137,7 +160,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
     for (const [index, file] of files.entries()) {
       const fileKey = sourceKeyForPath(file.relativePath, branch);
       const existingFile = stats.files[fileKey];
-      if (existingFile && existingFile.mtime === file.mtime) {
+      if (existingFile && indexedFileUnchanged(existingFile, file)) {
         if (
           lexicalRepairNeeded
           && sourceIncludesFile(source, file.relativePath)
@@ -147,7 +170,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
           try {
             content = await extractIndexableText(file.absolutePath, file.extension);
           } catch (error) {
-            if (!isMissingFileError(error)) {
+            if (!isMissingFileError(error) && !isNonTextContentError(error)) {
               throw error;
             }
             deleteSourceAlias(store, lexical, fileKey);
@@ -181,17 +204,22 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
         continue;
       }
 
+      const hadExistingFile = existingFile !== undefined;
       deleteSourceAlias(store, lexical, fileKey);
       let content: string;
       try {
         content = await extractIndexableText(file.absolutePath, file.extension);
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingFileError(error) && !isNonTextContentError(error)) {
           throw error;
         }
         delete stats.files[fileKey];
         deleteSourceAlias(store, lexical, fileKey);
-        deleted += 1;
+        if (isNonTextContentError(error) && !hadExistingFile) {
+          skipped += 1;
+        } else {
+          deleted += 1;
+        }
         await options.onProgress?.({
           phase: "file",
           source: source.path,
@@ -213,6 +241,7 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
 
       stats.files[fileKey] = {
         mtime: file.mtime,
+        size: file.size,
         chunks: chunks.length,
         relative_path: file.relativePath,
         branch_scope: branch?.scope,
@@ -276,6 +305,112 @@ export async function ingestSource(workspace: Workspace, source: SourceEntry, op
   }
 }
 
+async function prepareTemporaryIndexWorkspace(workspace: Workspace): Promise<Workspace> {
+  const suffix = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const tempDir = path.join(workspace.kbxDir, `.ingest-${suffix}`);
+  const tempWorkspace: Workspace = {
+    ...workspace,
+    kbxDir: tempDir,
+    manifestPath: path.join(tempDir, "manifest.json"),
+    configPath: path.join(tempDir, "config.json"),
+    sourcesPath: path.join(tempDir, "sources.json"),
+    statsPath: path.join(tempDir, "stats.json"),
+    lexicalPath: path.join(tempDir, "lexical.db"),
+    collectionDir: path.join(tempDir, "collection")
+  };
+
+  await mkdir(tempDir, { recursive: true });
+  await Promise.all([
+    copyIfExists(workspace.manifestPath, tempWorkspace.manifestPath),
+    copyIfExists(workspace.configPath, tempWorkspace.configPath),
+    copyIfExists(workspace.sourcesPath, tempWorkspace.sourcesPath),
+    copyIfExists(workspace.statsPath, tempWorkspace.statsPath),
+    copyIfExists(workspace.lexicalPath, tempWorkspace.lexicalPath),
+    copyIfExists(workspace.collectionDir, tempWorkspace.collectionDir)
+  ]);
+  return tempWorkspace;
+}
+
+async function swapIngestedIndex(
+  workspace: Workspace,
+  tempWorkspace: Workspace,
+  options: { includeSources?: boolean } = {}
+): Promise<void> {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const backupCollectionDir = path.join(workspace.kbxDir, `collection.backup-${suffix}`);
+  const backupLexicalPath = path.join(workspace.kbxDir, `lexical.backup-${suffix}.db`);
+  const backupStatsPath = path.join(workspace.kbxDir, `stats.backup-${suffix}.json`);
+  const backupSourcesPath = path.join(workspace.kbxDir, `sources.backup-${suffix}.json`);
+  let backedUpCollection = false;
+  let backedUpLexical = false;
+  let backedUpStats = false;
+  let backedUpSources = false;
+
+  try {
+    if (await exists(workspace.collectionDir)) {
+      await rename(workspace.collectionDir, backupCollectionDir);
+      backedUpCollection = true;
+    }
+    if (await exists(workspace.lexicalPath)) {
+      await rename(workspace.lexicalPath, backupLexicalPath);
+      backedUpLexical = true;
+    }
+    if (await exists(workspace.statsPath)) {
+      await rename(workspace.statsPath, backupStatsPath);
+      backedUpStats = true;
+    }
+    if (options.includeSources === true && await exists(workspace.sourcesPath)) {
+      await rename(workspace.sourcesPath, backupSourcesPath);
+      backedUpSources = true;
+    }
+
+    await rename(tempWorkspace.collectionDir, workspace.collectionDir);
+    if (await exists(tempWorkspace.lexicalPath)) {
+      await rename(tempWorkspace.lexicalPath, workspace.lexicalPath);
+    } else {
+      await rm(workspace.lexicalPath, { force: true });
+    }
+    await rename(tempWorkspace.statsPath, workspace.statsPath);
+    if (options.includeSources === true) {
+      await rename(tempWorkspace.sourcesPath, workspace.sourcesPath);
+    }
+
+    await Promise.all([
+      rm(backupCollectionDir, { recursive: true, force: true }),
+      rm(backupLexicalPath, { force: true }),
+      rm(backupStatsPath, { force: true }),
+      rm(backupSourcesPath, { force: true })
+    ]);
+  } catch (error) {
+    await Promise.all([
+      rm(workspace.collectionDir, { recursive: true, force: true }),
+      rm(workspace.lexicalPath, { force: true }),
+      rm(workspace.statsPath, { force: true }),
+      options.includeSources === true ? rm(workspace.sourcesPath, { force: true }) : Promise.resolve()
+    ]);
+    if (backedUpCollection) {
+      await rename(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
+    }
+    if (backedUpLexical) {
+      await rename(backupLexicalPath, workspace.lexicalPath).catch(() => undefined);
+    }
+    if (backedUpStats) {
+      await rename(backupStatsPath, workspace.statsPath).catch(() => undefined);
+    }
+    if (backedUpSources) {
+      await rename(backupSourcesPath, workspace.sourcesPath).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+async function copyIfExists(source: string, destination: string): Promise<void> {
+  if (!await exists(source)) {
+    return;
+  }
+  await cp(source, destination, { recursive: true, force: true });
+}
+
 function chunksForFile(
   source: SourceEntry,
   relativePath: string,
@@ -327,6 +462,10 @@ function totalIndexedChunks(stats: IndexStats): number {
   return Object.values(stats.files).reduce((total, file) => total + file.chunks, 0);
 }
 
+function indexedFileUnchanged(indexed: IndexedFileStats, file: Pick<SourceFileEntry, "mtime" | "size">): boolean {
+  return indexed.mtime === file.mtime && indexed.size === file.size;
+}
+
 export async function refreshWorkspaceIndex(workspace: Workspace): Promise<RefreshResult> {
   const sources = await loadSources(workspace);
   let files = 0;
@@ -355,7 +494,7 @@ export async function scanWorkspaceFreshness(workspace: Workspace): Promise<Fres
   const manifest = await loadManifest(workspace);
   const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
   const sources = await loadSources(workspace);
-  const currentFiles = new Map<string, number>();
+  const currentFiles = new Map<string, Pick<SourceFileEntry, "mtime" | "size">>();
   const currentBranchScopes = new Set<string>();
 
   for (const source of sources) {
@@ -371,7 +510,10 @@ export async function scanWorkspaceFreshness(workspace: Workspace): Promise<Fres
       useGitignore: source.no_gitignore === true ? false : true
     });
     for (const file of files) {
-      currentFiles.set(sourceKeyForPath(file.relativePath, branch), file.mtime);
+      currentFiles.set(sourceKeyForPath(file.relativePath, branch), {
+        mtime: file.mtime,
+        size: file.size
+      });
     }
   }
 
@@ -381,10 +523,10 @@ export async function scanWorkspaceFreshness(workspace: Workspace): Promise<Fres
     if (indexed.branch_scope && !currentBranchScopes.has(indexed.branch_scope)) {
       continue;
     }
-    const currentMtime = currentFiles.get(fileKey);
-    if (currentMtime === undefined) {
+    const currentFile = currentFiles.get(fileKey);
+    if (currentFile === undefined) {
       deleted += 1;
-    } else if (currentMtime !== indexed.mtime) {
+    } else if (!indexedFileUnchanged(indexed, currentFile)) {
       stale += 1;
     }
   }
@@ -562,7 +704,7 @@ export async function rebuildWorkspaceIndexForModel(
       await writeJson(tempWorkspace.statsPath, emptyStats(nextManifest));
     } else {
       for (const source of sources) {
-        await ingestSource(tempWorkspace, source);
+        await ingestSourceDirect(tempWorkspace, source);
       }
     }
 

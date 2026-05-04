@@ -16,6 +16,9 @@ export function setConfigValue(config: WorkspaceConfig, key: string, rawValue: s
   switch (key) {
     case "chunk.size":
       next.chunk.size = parsePositiveInteger(rawValue, key);
+      if (next.chunk.overlap >= next.chunk.size) {
+        throw new Error("chunk.size must be larger than chunk.overlap");
+      }
       break;
     case "chunk.overlap":
       next.chunk.overlap = parseNonNegativeInteger(rawValue, key);

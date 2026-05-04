@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
@@ -124,6 +124,7 @@ export interface SourceFile {
   relativePath: string;
   extension: string;
   mtime: number;
+  size: number;
   content: string;
 }
 
@@ -132,6 +133,7 @@ export interface SourceFileEntry {
   relativePath: string;
   extension: string;
   mtime: number;
+  size: number;
 }
 
 export async function listIndexableFileEntries(
@@ -141,6 +143,7 @@ export async function listIndexableFileEntries(
 ): Promise<SourceFileEntry[]> {
   const targetPath = path.resolve(workspaceRoot, targetRelativePath);
   const targetInfo = await stat(targetPath);
+  const workspaceRealRoot = await realpath(workspaceRoot);
   const targetPathRelativeToWorkspace = toPosixPath(path.relative(workspaceRoot, targetPath));
   const normalizedTargetPath = targetPathRelativeToWorkspace === "" ? "." : targetPathRelativeToWorkspace;
   const gitignore = options.useGitignore === false ? emptyGitignorePolicy() : await loadGitignore(workspaceRoot);
@@ -156,7 +159,8 @@ export async function listIndexableFileEntries(
         cwd: workspaceRoot,
         dot: true,
         ignore: globIgnore,
-        onlyFiles: true
+        onlyFiles: true,
+        followSymbolicLinks: false
       })
     : [normalizedTargetPath];
 
@@ -188,8 +192,13 @@ export async function listIndexableFileEntries(
     }
 
     let fileInfo;
+    let realAbsolutePath;
     try {
-      fileInfo = await stat(absolutePath);
+      realAbsolutePath = await realpath(absolutePath);
+      if (!isPathInside(workspaceRealRoot, realAbsolutePath)) {
+        return null;
+      }
+      fileInfo = await stat(realAbsolutePath);
     } catch (error) {
       if (isMissingFileError(error)) {
         return null;
@@ -198,10 +207,11 @@ export async function listIndexableFileEntries(
     }
 
     return {
-      absolutePath,
+      absolutePath: realAbsolutePath,
       relativePath,
       extension,
-      mtime: Math.floor(fileInfo.mtimeMs)
+      mtime: Math.floor(fileInfo.mtimeMs),
+      size: fileInfo.size
     };
   });
 
@@ -264,6 +274,11 @@ interface GitignorePolicy {
   patterns: string[];
 }
 
+interface IgnoreRuleSet {
+  baseRelativePath: string;
+  matcher: ReturnType<typeof ignore>;
+}
+
 function emptyGitignorePolicy(): GitignorePolicy {
   return {
     ignores: () => false,
@@ -272,23 +287,68 @@ function emptyGitignorePolicy(): GitignorePolicy {
 }
 
 async function loadGitignore(workspaceRoot: string): Promise<GitignorePolicy> {
-  const matcher = ignore();
+  const ruleSets: IgnoreRuleSet[] = [];
   const patterns: string[] = [];
-  for (const fileName of [".gitignore", ".kbxignore"]) {
+
+  const addIgnoreFile = async (fileName: string, includeInFastGlobPatterns: boolean) => {
     try {
       const raw = await readFile(path.join(workspaceRoot, fileName), "utf8");
-      matcher.add(raw);
-      patterns.push(...raw.split(/\r?\n/));
+      const matcher = ignore().add(raw);
+      const baseRelativePath = toPosixPath(path.dirname(fileName));
+      ruleSets.push({
+        baseRelativePath: baseRelativePath === "." ? "." : baseRelativePath,
+        matcher
+      });
+      if (includeInFastGlobPatterns) {
+        patterns.push(...raw.split(/\r?\n/));
+      }
     } catch (error) {
       if (!isMissingFileError(error)) {
         throw error;
       }
     }
+  };
+
+  const gitignoreFiles = await fg("**/.gitignore", {
+    absolute: false,
+    cwd: workspaceRoot,
+    dot: true,
+    ignore: globIgnorePatterns(builtInGlobExcludes({ includeKbxImports: false, includeKbxSessions: false })),
+    onlyFiles: true,
+    followSymbolicLinks: false
+  });
+  for (const fileName of gitignoreFiles.sort()) {
+    await addIgnoreFile(fileName, fileName === ".gitignore");
   }
+  await addIgnoreFile(".kbxignore", true);
+
   return {
-    ignores: (relativePath) => matcher.ignores(relativePath),
+    ignores: (relativePath) => ignoredByRuleSets(ruleSets, relativePath),
     patterns
   };
+}
+
+function ignoredByRuleSets(ruleSets: IgnoreRuleSet[], relativePath: string): boolean {
+  let ignored = false;
+  for (const ruleSet of ruleSets) {
+    const candidate = ruleSet.baseRelativePath === "."
+      ? relativePath
+      : relativePath.startsWith(`${ruleSet.baseRelativePath}/`)
+        ? relativePath.slice(ruleSet.baseRelativePath.length + 1)
+        : null;
+    if (!candidate) {
+      continue;
+    }
+
+    const result = ruleSet.matcher.test(candidate);
+    if (result.ignored) {
+      ignored = true;
+    }
+    if (result.unignored) {
+      ignored = false;
+    }
+  }
+  return ignored;
 }
 
 function safeGitignoreGlobExcludes(patterns: string[]): string[] {
@@ -427,6 +487,11 @@ function staticGlobPrefix(pattern: string): string {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function mapConcurrent<T, R>(

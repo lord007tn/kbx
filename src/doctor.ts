@@ -88,15 +88,20 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
     const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
     try {
       const lexicalContentCount = lexical.contentCount;
+      const statsChunkCount = totalIndexedChunks(stats);
       const matchesCollection = vectorChunkCount === null || lexicalContentCount === vectorChunkCount;
+      const matchesStats = lexical.chunkCount === statsChunkCount;
       lines.push({
-        ok: matchesCollection,
+        ok: matchesCollection && matchesStats,
         label: "lexical",
-        detail: vectorChunkCount === null
-          ? `${lexical.chunkCount} chunk alias(es), ${lexicalContentCount} unique content chunk(s); collection count unavailable`
-          : matchesCollection
-            ? `${lexical.chunkCount} chunk alias(es), ${lexicalContentCount} unique content chunk(s), matches collection`
-            : `${lexical.chunkCount} chunk alias(es), ${lexicalContentCount} unique content chunk(s), collection has ${vectorChunkCount}; run kbx ingest to repair hybrid retrieval`
+        detail: lexicalHealthDetail({
+          aliasCount: lexical.chunkCount,
+          contentCount: lexicalContentCount,
+          statsChunkCount,
+          vectorChunkCount,
+          matchesCollection,
+          matchesStats
+        })
       });
     } finally {
       await lexical.close();
@@ -140,6 +145,31 @@ export async function runDoctor(workspace: Workspace | null, options: DoctorOpti
   }
 
   return lines;
+}
+
+function lexicalHealthDetail(input: {
+  aliasCount: number;
+  contentCount: number;
+  statsChunkCount: number;
+  vectorChunkCount: number | null;
+  matchesCollection: boolean;
+  matchesStats: boolean;
+}): string {
+  const base = `${input.aliasCount} chunk alias(es), ${input.contentCount} unique content chunk(s)`;
+  const collection = input.vectorChunkCount === null
+    ? "collection count unavailable"
+    : input.matchesCollection
+      ? "matches collection"
+      : `collection has ${input.vectorChunkCount}`;
+  const stats = input.matchesStats
+    ? "matches stats"
+    : `stats have ${input.statsChunkCount} chunk alias(es)`;
+  const repair = input.matchesCollection && input.matchesStats ? "" : "; run kbx ingest to repair hybrid retrieval";
+  return `${base}, ${collection}, ${stats}${repair}`;
+}
+
+function totalIndexedChunks(stats: IndexStats): number {
+  return Object.values(stats.files).reduce((total, file) => total + file.chunks, 0);
 }
 
 export async function freshnessLine(workspace: Workspace, stats: IndexStats): Promise<DoctorLine> {

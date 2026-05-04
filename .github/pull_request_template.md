@@ -17,7 +17,8 @@
 - [ ] `npm run typecheck`
 - [ ] `$env:KBX_EMBEDDER='hash'; npm test`
 - [ ] `npm run build`
-- [ ] `npm pack --dry-run`
+- [ ] `npm run smoke:pack`
+- [ ] `$env:KBX_EMBEDDER='hash'; npm run smoke:install`
 
 ## CLI Evidence
 

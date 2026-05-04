@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import JSZip from "jszip";
 import { extractIndexableText } from "../src/document-text";
-import { ingestSource } from "../src/indexer";
+import { ingestSource, loadIndexStats } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { searchWorkspace } from "../src/search";
 import { SCHEMA_VERSION, type SourceEntry, type WorkspaceManifest } from "../src/types";
@@ -77,6 +77,47 @@ test("extractIndexableText reads EPUB text", async () => {
 
     assert.match(text, /EPUB planning epsilon token/);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("extractIndexableText rejects binary content with a text extension", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-binary-text-"));
+  try {
+    const filePath = path.join(root, "binary.txt");
+    await writeFile(filePath, Buffer.from([0x00, 0x9f, 0x92, 0x96, 0x01]));
+
+    await assert.rejects(
+      () => extractIndexableText(filePath, ".txt"),
+      /does not look like UTF-8 text/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ingestSource skips binary content with a text extension", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-binary-text-ingest-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "binary.txt"), Buffer.from([0x00, 0x9f, 0x92, 0x96, 0x01]));
+    await writeFile(path.join(root, "note.md"), "# Note\n\nplain searchable token\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+
+    const result = await ingestSource(workspace, source);
+    const stats = await loadIndexStats(workspace, "test-model", 3);
+
+    assert.equal(result.skipped, 1);
+    assert.equal("binary.txt" in stats.files, false);
+    assert.equal("note.md" in stats.files, true);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -33,6 +33,21 @@ test("LexicalIndexStore persists and searches indexed chunks", async () => {
   }
 });
 
+test("LexicalIndexStore read-only open does not create a missing index", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-readonly-missing-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+
+    await assert.rejects(
+      () => LexicalIndexStore.open(workspace, { readOnly: true }),
+      /unable to open database file|cannot open database|no such file/i
+    );
+    await assert.rejects(() => access(workspace.kbxDir), /ENOENT/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("LexicalIndexStore deletes all chunks for a source", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-delete-"));
   try {
