@@ -15,7 +15,7 @@ export interface SourcePolicyOptions {
 
 export function sourceForTarget(workspaceRoot: string, target: string, options: SourcePolicyOptions = {}): SourceEntry {
   const relative = path.relative(workspaceRoot, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathInside(workspaceRoot, target)) {
     throw new Error("v0.1 only supports ingesting paths inside the initialized workspace");
   }
 
@@ -134,5 +134,5 @@ async function copyIndexableExternalFiles(
 
 function isPathInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }

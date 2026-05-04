@@ -87,6 +87,38 @@ test("generic file refresh hook accepts JSON paths arrays", async () => {
   }
 });
 
+test("generic file refresh hook accepts paths whose segment starts with two dots", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-generic-hook-dotdot-refresh-"));
+  const previousCwd = process.cwd();
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    const source: SourceEntry = { path: "..notes", kind: "workspace", include: [], exclude: [] };
+    await mkdir(path.join(root, "..notes"), { recursive: true });
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "..notes", "note.md"), "# Note\n\nold dotdot token\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    await writeJson(workspace.sourcesPath, [source]);
+    await ingestSource(workspace, source);
+
+    await writeFile(path.join(root, "..notes", "note.md"), "# Note\n\nnew dotdot token\n", "utf8");
+    process.chdir(root);
+    const result = await handleFileRefreshHook(JSON.stringify({
+      paths: ["..notes/note.md"]
+    }));
+
+    const hits = await searchWorkspace(workspace, "new dotdot token", 3);
+    assert.equal(hits[0]?.source, "..notes/note.md");
+    assert.match(JSON.stringify(result), /refreshed \.\.notes\/note\.md/);
+  } finally {
+    process.chdir(previousCwd);
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function manifest(modelName: string, dim: number): WorkspaceManifest {
   return {
     workspace_id: "test-workspace",

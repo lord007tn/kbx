@@ -156,6 +156,7 @@ export async function listIndexableFileEntries(
   const entries = targetInfo.isDirectory()
     ? await fg(globSearchPatterns(normalizedTargetPath, options.include ?? []), {
         absolute: false,
+        caseSensitiveMatch: false,
         cwd: workspaceRoot,
         dot: true,
         ignore: globIgnore,
@@ -491,7 +492,7 @@ function unique(values: string[]): string[] {
 
 function isPathInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 async function mapConcurrent<T, R>(

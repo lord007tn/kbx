@@ -70,6 +70,18 @@ test("listIndexableFiles reads managed imports only when explicitly requested", 
   }
 });
 
+test("listIndexableFiles includes indexable files with uppercase extensions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-files-"));
+  try {
+    await writeFile(path.join(root, "LOUD.MD"), "# Loud\n", "utf8");
+
+    const files = await listIndexableFiles(root, ".");
+    assert.deepEqual(files.map((file) => file.relativePath), ["LOUD.MD"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function makePptx(text: string): Promise<Buffer> {
   const zip = new JSZip();
   zip.folder("ppt")?.folder("slides")?.file("slide1.xml", `<?xml version="1.0" encoding="UTF-8"?>

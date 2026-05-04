@@ -51,14 +51,14 @@ async function runRefresh(workspace: Workspace, target: string | undefined, watc
   try {
     if (target) {
       const result = await ingestWorkspaceTarget(workspace, target);
-      console.log(`Refreshed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
+      console.log(`Refreshed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} skipped/unchanged file(s), ${result.deleted} deleted file(s).`);
       return;
     }
 
     const sources = await loadSources(workspace);
     for (const source of sources.length > 0 ? sources : [{ path: ".", kind: "workspace" as const, include: [], exclude: [] }]) {
       const result = await ingestSource(workspace, source);
-      console.log(`Refreshed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} unchanged file(s), ${result.deleted} deleted file(s).`);
+      console.log(`Refreshed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} skipped/unchanged file(s), ${result.deleted} deleted file(s).`);
     }
   } catch (error) {
     console.error(`Refresh failed: ${error instanceof Error ? error.message : String(error)}`);
