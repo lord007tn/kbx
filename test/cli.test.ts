@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -164,6 +164,28 @@ test("CLI ingest path watch mode stays scoped to the requested target", async ()
   }
 });
 
+test("CLI background watch keeps the index fresh and can be stopped", async () => {
+  const fixture = await createFixture("kbx-cli-watch-background-");
+  try {
+    await writeFile(path.join(fixture.workspace, "note.md"), "# Note\n\ninitial background token\n", "utf8");
+    await runCli(fixture, ["init", "--here", "--model", "minilm"]);
+    await runCli(fixture, ["ingest"]);
+
+    const started = await runCli(fixture, ["watch", "--background"]);
+    assert.match(started.stdout, /Started \(pid \d+\)\./);
+    assert.equal(await waitForFileText(path.join(fixture.workspace, ".kbx", "watch.log"), /Watching 1 path\(s\)/), true);
+
+    await writeFile(path.join(fixture.workspace, "note.md"), "# Note\n\nupdated background token\n", "utf8");
+    assert.equal(await waitForCliSearch(fixture, "updated background token", /updated background token/), true);
+
+    const stopped = await runCli(fixture, ["watch", "--stop"]);
+    assert.match(stopped.stdout, /Stopped background watcher/);
+  } finally {
+    await runCli(fixture, ["watch", "--stop"]).catch(() => undefined);
+    await cleanupFixture(fixture);
+  }
+});
+
 interface Fixture {
   root: string;
   workspace: string;
@@ -253,6 +275,34 @@ async function waitForOutput(watcher: { output: () => string }, pattern: RegExp,
   while (Date.now() - started < timeoutMs) {
     if (pattern.test(watcher.output())) {
       return true;
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
+async function waitForCliSearch(fixture: Fixture, query: string, pattern: RegExp, timeoutMs = 10000): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const result = await runCli(fixture, ["search", query, "-k", "1"]);
+    if (pattern.test(result.stdout)) {
+      return true;
+    }
+    await sleep(250);
+  }
+  return false;
+}
+
+async function waitForFileText(filePath: string, pattern: RegExp, timeoutMs = 8000): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const content = await readFile(filePath, "utf8");
+      if (pattern.test(content)) {
+        return true;
+      }
+    } catch {
+      // The background watcher creates its log after the child process starts.
     }
     await sleep(100);
   }

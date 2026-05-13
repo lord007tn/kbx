@@ -65,6 +65,8 @@ kbx search "workspace registry" --fresh
 kbx search "workspace registry" --global
 kbx search "workspace registry" --reranker model
 kbx watch
+kbx watch --background
+kbx watch --stop
 kbx status --fresh
 kbx doctor --repair
 kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
@@ -78,6 +80,7 @@ kbx graph query "startSession"
 kbx rewind preview <session-id>
 kbx stats --fresh
 kbx config set chunk.strategy sentence
+kbx config set watch.auto enabled
 kbx config set init.root_preference git-root --global
 kbx model list
 kbx model benchmark
@@ -180,7 +183,7 @@ Tools exposed:
 - `kbx_mcp_config`
 - gated destructive tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, `kbx_delete_workspace_kb`, `kbx_rewind_apply`
 
-`kbx_context` returns a bounded, grouped markdown context bundle for task-level use. `kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. They opportunistically refresh changed indexed content when the change count is small, so the search tools are not advertised as read-only to MCP clients. Use `kbx_refresh_index` or `kbx watch` for larger updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes initialization instructions, a `kbx_usage` prompt, and a `kbx://usage` resource with agent guidance.
+`kbx_context` returns a bounded, grouped markdown context bundle for task-level use. `kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. They opportunistically refresh changed indexed content when the change count is small, so the search tools are not advertised as read-only to MCP clients. Use `kbx_refresh_index`, `kbx watch`, or `kbx config set watch.auto enabled` for larger continuous updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes initialization instructions, a `kbx_usage` prompt, and a `kbx://usage` resource with agent guidance.
 
 `kbx_session_handoff` returns a compact workspace/index summary for session start or handoff. Durable session capture is opt-in through `sessions.capture`; session events, checkpoints, and rewind snapshots are stored in `.kbx/sessions.db`. `kbx_memory_add` lets an agent save explicit compact decisions, preferences, or handoff notes with a required retention period; those notes are stored under `.kbx/sessions` and become searchable after indexing.
 
@@ -228,7 +231,7 @@ Implemented:
 - global search across registered workspaces with `kbx search --global`
 - doctor repair flow with `kbx doctor --repair`
 - explicit search freshness with `kbx search --fresh`
-- hot indexing with `kbx ingest --watch` or `kbx watch`
+- hot indexing with `kbx ingest --watch`, `kbx watch`, or `kbx config set watch.auto enabled`
 - source list/remove
 - external import snapshots
 - explicit retention-bound session memory source under `.kbx/sessions`

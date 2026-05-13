@@ -40,6 +40,7 @@ import {
 import { LexicalIndexStore } from "./lexical-index";
 import { KBX_VERSION } from "./version";
 import type { IndexStats, SourceEntry } from "./types";
+import { watchStatus } from "./watch";
 
 const DEFAULT_SEARCH_PREVIEW_CHARS = 360;
 const MCP_SEARCH_AUTO_REFRESH_MAX_CHANGES = 25;
@@ -308,12 +309,9 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
     },
     async () => {
       const freshness = await scanFreshnessForMcp(workspace);
+      const config = await loadConfig(workspace);
       return textResult(JSON.stringify({
-        watcher: {
-          managed_by_mcp: false,
-          command: "kbx watch",
-          note: "Run the CLI watcher in a separate terminal when continuous live updates are needed."
-        },
+        watcher: await watchStatus(workspace, config.watch.auto),
         freshness
       }, null, 2));
     }

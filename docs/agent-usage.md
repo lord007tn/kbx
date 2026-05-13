@@ -11,7 +11,7 @@ Use `kbx` when an agent needs local workspace context instead of asking the user
 ## Search Pattern
 
 1. Check index health with `kbx_index_status` if freshness is uncertain.
-2. Use `kbx_watch_status` during active editing sessions to inspect freshness and watcher guidance.
+2. Use `kbx_watch_status` during active editing sessions to inspect freshness and background watcher state.
 3. Call `kbx_session_handoff` at session start or handoff when you need a compact workspace/index summary.
 4. Call `kbx_search` with `top_k=5` for focused questions.
 5. Use `top_k=10` for broad discovery or ambiguous terms.
@@ -20,7 +20,7 @@ Use `kbx` when an agent needs local workspace context instead of asking the user
 8. Search again with exact names when needed: symbols, config keys, error strings, filenames, routes, and package names.
 9. Use `kbx_graph_query` when the task is about relationships between files, headings, symbols, dependencies, or retained memory.
 
-`kbx_search` performs bounded opportunistic freshness when the detected change count is small. Use `kbx_refresh_file` when the relevant path is known, or `kbx_refresh_index` when the workspace has many changes. For continuous freshness, run `kbx watch` in a separate terminal.
+`kbx_search` performs bounded opportunistic freshness when the detected change count is small. Use `kbx_refresh_file` when the relevant path is known, or `kbx_refresh_index` when the workspace has many changes. For continuous freshness, run `kbx watch` in a separate terminal or enable one background watcher with `kbx config set watch.auto enabled`.
 
 ## Memory Notes
 

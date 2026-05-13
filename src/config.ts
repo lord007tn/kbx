@@ -11,7 +11,8 @@ const CONFIG_KEYS = new Set([
   "sessions.max_event_bytes",
   "sessions.index_events",
   "graph.enabled",
-  "graph.max_chunks"
+  "graph.max_chunks",
+  "watch.auto"
 ]);
 const USER_CONFIG_KEYS = new Set(["init.root_preference"]);
 
@@ -82,6 +83,12 @@ export function setConfigValue(config: WorkspaceConfig, key: string, rawValue: s
       break;
     case "graph.max_chunks":
       next.graph.max_chunks = parsePositiveInteger(rawValue, key);
+      break;
+    case "watch.auto":
+      if (rawValue !== "disabled" && rawValue !== "enabled") {
+        throw new Error("watch.auto must be disabled or enabled");
+      }
+      next.watch.auto = rawValue;
       break;
   }
 

@@ -32,7 +32,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Global search across registered workspaces via `kbx search --global`.
 - Workspace stats, freshness reporting, explicit search freshness, reset, doctor checks, lexical/vector consistency checks, and benchmark options.
 - Doctor repair flow via `kbx doctor --repair`.
-- Watch ingest mode using current workspace/source boundaries via `kbx ingest --watch` and `kbx watch`.
+- Watch ingest mode using current workspace/source boundaries via `kbx ingest --watch`, `kbx watch`, and one detached auto watcher enabled by `watch.auto`.
 - Root `.kbxignore` support in addition to `.gitignore`.
 - Git branch-scoped workspace indexing with current-branch search filtering and vector storage dedupe for identical chunk content.
 - Session memory commands: `kbx memory add`, `kbx memory list`, and `kbx memory prune`.

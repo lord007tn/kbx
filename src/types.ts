@@ -32,6 +32,9 @@ export interface WorkspaceConfig {
     enabled: "disabled" | "enabled";
     max_chunks: number;
   };
+  watch: {
+    auto: "disabled" | "enabled";
+  };
 }
 
 export interface UserConfig {

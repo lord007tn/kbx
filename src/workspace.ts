@@ -46,6 +46,9 @@ export const defaultConfig: WorkspaceConfig = {
   graph: {
     enabled: "disabled",
     max_chunks: 20000
+  },
+  watch: {
+    auto: "disabled"
   }
 };
 
@@ -161,6 +164,10 @@ export async function loadConfig(workspace: Workspace): Promise<WorkspaceConfig>
     graph: {
       ...defaultConfig.graph,
       ...stored.graph
+    },
+    watch: {
+      ...defaultConfig.watch,
+      ...stored.watch
     }
   };
 }

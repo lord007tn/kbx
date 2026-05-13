@@ -48,6 +48,12 @@ test("config controls session capture and graph knowledge", () => {
   assert.throws(() => setConfigValue(defaultConfig, "sessions.max_event_bytes", "0"), /positive integer/);
 });
 
+test("config controls background watch auto-start", () => {
+  const config = setConfigValue(defaultConfig, "watch.auto", "enabled");
+  assert.equal(getConfigValue(config, "watch.auto"), "enabled");
+  assert.throws(() => setConfigValue(defaultConfig, "watch.auto", "yes"), /disabled or enabled/);
+});
+
 test("user config stores init root preference", () => {
   const config = setUserConfigValue(defaultUserConfig, "init.root_preference", "git-root");
   assert.equal(getUserConfigValue(config, "init.root_preference"), "git-root");

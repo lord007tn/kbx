@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { confirm, isCancel, select } from "@clack/prompts";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { KBX_AGENT_GUIDE } from "./agent-guide";
@@ -30,7 +30,7 @@ import {
   type SessionEventType
 } from "./session-store";
 import { KBX_VERSION } from "./version";
-import { watchIngest } from "./watch";
+import { startBackgroundWatch, stopBackgroundWatch, watchIngest, watchStatus } from "./watch";
 import { generateAdapterConfig, generateAdapterHooks, listAdapters } from "./adapters";
 import { handleClaudeCodePostToolUse, handleFileRefreshHook, handleSessionCaptureHook } from "./hooks";
 import { createTerminalProgress } from "./terminal-ui";
@@ -230,6 +230,8 @@ Notes:
 
     if (options.watch === true) {
       await watchIngest(workspace, absoluteTarget);
+    } else {
+      await maybeStartConfiguredWatch(workspace);
     }
   });
 
@@ -283,6 +285,7 @@ Model or LLM reranking is optional and off by default.
     if (!workspace) {
       throw new Error("No kbx workspace found. Run kbx init first.");
     }
+    await maybeStartConfiguredWatch(workspace);
 
     if (options.fresh === true) {
       const refreshProgress = createIngestProgress();
@@ -353,6 +356,7 @@ Examples:
     }
   ) => {
     const workspace = await requireWorkspace();
+    await maybeStartConfiguredWatch(workspace);
 
     if (options.fresh === true) {
       const refreshProgress = createIngestProgress();
@@ -392,17 +396,47 @@ program
   .description("Keep the current workspace index fresh while files change.")
   .summary("Watch manifest sources and refresh changed or deleted files during agent sessions.")
   .argument("[path]", "workspace file or directory to watch")
+  .option("--background", "start one detached background watcher and return")
+  .option("--stop", "stop the detached background watcher for this workspace")
+  .option("--status", "show detached watcher status")
+  .addOption(new Option("--daemon", "run as an internal detached watcher child").hideHelp())
   .addHelpText("after", `
 
 Examples:
   $ kbx watch
   $ kbx watch docs
+  $ kbx watch --background
+  $ kbx watch --stop
 
-This is equivalent to a long-running hot ingest loop. Press Ctrl+C to stop.
+This is equivalent to a long-running hot ingest loop. Press Ctrl+C to stop foreground mode.
 `)
-  .action(async (targetPath: string | undefined) => {
+  .action(async (
+    targetPath: string | undefined,
+    options: { background?: boolean; stop?: boolean; status?: boolean; daemon?: boolean }
+  ) => {
     const workspace = await requireWorkspace();
-    await watchIngest(workspace, targetPath ? path.resolve(targetPath) : undefined);
+    const target = targetPath ? path.resolve(targetPath) : undefined;
+
+    if (options.stop === true) {
+      const stopped = await stopBackgroundWatch(workspace);
+      console.log(stopped.stopped ? `Stopped background watcher${stopped.pid ? ` (pid ${stopped.pid})` : ""}.` : "No background watcher is recorded.");
+      return;
+    }
+
+    if (options.status === true) {
+      const config = await loadConfig(workspace);
+      console.log(JSON.stringify(await watchStatus(workspace, config.watch.auto), null, 2));
+      return;
+    }
+
+    if (options.background === true) {
+      const result = await startBackgroundWatch(workspace, target);
+      console.log(`${result.started ? "Started" : "Background watcher already running"} (pid ${result.pid}).`);
+      console.log(`Log: ${result.log_file}`);
+      return;
+    }
+
+    await watchIngest(workspace, target, { daemon: options.daemon === true });
   });
 
 const mcpCommand = program
@@ -423,6 +457,7 @@ Tools:
 `)
   .action(async () => {
     const workspace = await requireWorkspace();
+    await maybeStartConfiguredWatch(workspace, { silent: true });
     await runMcpServer(workspace);
   });
 
@@ -589,11 +624,12 @@ Examples:
   $ kbx config set chunk.size 1200
   $ kbx config set mcp.citations full-path
   $ kbx config set mcp.destructive_tools enabled
+  $ kbx config set watch.auto enabled
   $ kbx config set init.root_preference git-root --global
 
 Keys:
   chunk.size, chunk.overlap, chunk.strategy (heading|fixed|sentence), mcp.citations, mcp.destructive_tools
-  init.root_preference (--global)
+  sessions.*, graph.*, watch.auto (disabled|enabled), init.root_preference (--global)
 `)
   .action(async (action: string, key?: string, value?: string, options?: { global?: boolean }) => {
     if (options?.global === true || key?.startsWith("init.")) {
@@ -642,8 +678,12 @@ Keys:
       if (!key || value === undefined) {
         throw new Error("Usage: kbx config set <key> <value>");
       }
-      await saveConfig(workspace, setConfigValue(config, key, value));
+      const nextConfig = setConfigValue(config, key, value);
+      await saveConfig(workspace, nextConfig);
       console.log(`${key}=${value}`);
+      if (key === "watch.auto" && nextConfig.watch.auto === "enabled") {
+        await maybeStartConfiguredWatch(workspace);
+      }
       return;
     }
 
@@ -1700,6 +1740,21 @@ async function requireWorkspace() {
     throw new Error("No kbx workspace found. Run kbx init first.");
   }
   return workspace;
+}
+
+async function maybeStartConfiguredWatch(
+  workspace: Awaited<ReturnType<typeof requireWorkspace>>,
+  options: { silent?: boolean } = {}
+): Promise<void> {
+  const config = await loadConfig(workspace);
+  if (config.watch.auto !== "enabled") {
+    return;
+  }
+
+  const result = await startBackgroundWatch(workspace);
+  if (options.silent !== true && result.started) {
+    console.error(`Started background watcher (pid ${result.pid}). Log: ${result.log_file}`);
+  }
 }
 
 async function vectorChunkCount(workspace: Awaited<ReturnType<typeof requireWorkspace>>, dim: number): Promise<number> {

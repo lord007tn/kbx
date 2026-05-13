@@ -4,7 +4,7 @@ Use kbx when the user asks about this workspace, prior decisions, local docs, im
 
 Recommended workflow:
 1. Call kbx_index_status when you are unsure whether an index exists or may be stale.
-2. Call kbx_watch_status when the user is actively editing files or asks whether live context is current.
+2. Call kbx_watch_status when the user is actively editing files or asks whether live context is current or background watch is running.
 3. Call kbx_session_handoff at session start or before handing work to another agent when you need a compact workspace/index summary.
 4. Call kbx_context for task-level context that should come back grouped and bounded in one response.
 5. Call kbx_search before asking the user to paste files or before dumping broad shell output.

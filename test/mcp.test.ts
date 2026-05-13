@@ -262,12 +262,15 @@ test("kbx_watch_status reports freshness and CLI watcher guidance", async () => 
 
     const response = await callTool(server, "kbx_watch_status", {});
     const body = JSON.parse(response.content[0]!.text) as {
-      watcher: { managed_by_mcp: boolean; command: string };
+      watcher: { auto: string; running: boolean; pid: number | null; pid_file: string; log_file: string };
       freshness: { stale: number; deleted: number; newFiles: number };
     };
 
-    assert.equal(body.watcher.managed_by_mcp, false);
-    assert.equal(body.watcher.command, "kbx watch");
+    assert.equal(body.watcher.auto, "disabled");
+    assert.equal(body.watcher.running, false);
+    assert.equal(body.watcher.pid, null);
+    assert.match(body.watcher.pid_file, /watch\.pid$/);
+    assert.match(body.watcher.log_file, /watch\.log$/);
     assert.deepEqual({ stale: body.freshness.stale, deleted: body.freshness.deleted, newFiles: body.freshness.newFiles }, {
       stale: 0,
       deleted: 0,
