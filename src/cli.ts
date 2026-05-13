@@ -3,6 +3,7 @@ import { confirm, isCancel, select } from "@clack/prompts";
 import { Command, Option } from "commander";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { KBX_AGENT_GUIDE } from "./agent-guide";
 import { getConfigValue, getUserConfigValue, listConfigValues, listUserConfigValues, setConfigValue, setUserConfigValue } from "./config";
 import { buildWorkspaceContext, formatWorkspaceContextMarkdown } from "./context";
@@ -607,6 +608,30 @@ The generated hook config is additive. Merge it with existing client settings.
       console.log(`# ${note}`);
     }
     console.log(snippet.content);
+  });
+
+agentCommand
+  .command("plugin")
+  .description("Print plugin installation guidance for supported agent clients.")
+  .summary("Show local plugin paths and install commands for Claude Code.")
+  .argument("[client]", "plugin-capable client", "claude-code")
+  .action((client: string) => {
+    if (client !== "claude-code") {
+      throw new Error("Only claude-code has a packaged kbx plugin. Use `kbx mcp config --list` for MCP-only clients.");
+    }
+    const root = packageRoot();
+    const pluginPath = path.join(root, "plugins", "claude-code", "kbx");
+    console.log("Claude Code plugin");
+    console.log(`Plugin path: ${pluginPath}`);
+    console.log("Test locally:");
+    console.log(`  claude --plugin-dir ${JSON.stringify(pluginPath)}`);
+    console.log("Install from this repository marketplace inside Claude Code:");
+    console.log(`  /plugin marketplace add ${JSON.stringify(root)}`);
+    console.log("  /plugin install kbx@kbx-tools");
+    console.log("For Codex CLI:");
+    console.log("  kbx mcp config codex");
+    console.log("For Claude Desktop / Claude MCP config:");
+    console.log("  kbx mcp config claude");
   });
 
 const devCommand = program
@@ -1816,6 +1841,13 @@ async function maybeInitWorkspace() {
   }
   const root = await resolveInitRoot(".", {});
   return initWorkspace(workspaceFromRoot(root).root);
+}
+
+function packageRoot(): string {
+  const entryDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.basename(entryDir) === "dist" || path.basename(entryDir) === "src"
+    ? path.dirname(entryDir)
+    : entryDir;
 }
 
 async function requireWorkspace() {

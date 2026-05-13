@@ -1,0 +1,22 @@
+{
+  "name": "kbx-tools",
+  "description": "Local kbx integrations for Claude Code.",
+  "version": "0.1.1",
+  "owner": {
+    "name": "kbx"
+  },
+  "plugins": [
+    {
+      "name": "kbx",
+      "source": "./plugins/claude-code/kbx",
+      "description": "Use kbx as a local-first workspace knowledge base in Claude Code.",
+      "version": "0.1.1",
+      "author": {
+        "name": "kbx"
+      },
+      "license": "MIT",
+      "category": "knowledge",
+      "tags": ["mcp", "local-first", "knowledge-base", "codex", "claude-code"]
+    }
+  ]
+}

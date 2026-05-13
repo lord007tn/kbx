@@ -40,7 +40,9 @@ Use `kbx_session_record_event` for explicit event capture, `kbx_session_checkpoi
 
 ## Hook Support
 
-Claude Code users can run `kbx agent hooks claude-code` to generate an additive `.claude/settings.json` hook snippet. The hook runs after successful Write/Edit/MultiEdit operations and refreshes the edited file in the local kbx index.
+Claude Code users can install the packaged plugin under `plugins/claude-code/kbx` or run `kbx agent hooks claude-code` to generate an additive `.claude/settings.json` hook snippet. The plugin includes MCP config, the same post-edit refresh hook, a `kbx-dev-mode` skill, and a `/kbx:kbx-status` command.
+
+Use `kbx agent plugin claude-code` to print the local plugin path and install commands. Claude Desktop / Claude MCP config and Codex CLI should use `kbx mcp config claude` and `kbx mcp config codex`.
 
 ## Citation Behavior
 

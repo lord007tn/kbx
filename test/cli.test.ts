@@ -215,6 +215,20 @@ test("CLI dev report is opt-in and writes local debug reports", async () => {
   }
 });
 
+test("CLI prints Claude Code plugin installation guidance", async () => {
+  const fixture = await createFixture("kbx-cli-plugin-guide-");
+  try {
+    const guide = await runCli(fixture, ["agent", "plugin", "claude-code"]);
+
+    assert.match(guide.stdout, /Claude Code plugin/);
+    assert.match(guide.stdout, /plugins[\\/]claude-code[\\/]kbx/);
+    assert.match(guide.stdout, /plugin install kbx@kbx-tools/);
+    assert.match(guide.stdout, /kbx mcp config codex/);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 interface Fixture {
   root: string;
   workspace: string;

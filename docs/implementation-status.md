@@ -51,7 +51,7 @@ This document records what is already present in the current `kbx` codebase so t
 - MCP prompt/resource guidance for agent usage.
 - Local agent usage guidance via `kbx agent guide`.
 - MCP config snippet adapters for Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, VS Code Copilot, JetBrains Copilot, Zed, OpenCode, Kilo, Kiro, Qwen Code, Antigravity, and Pi.
-- Claude Code hook adapter via `kbx agent hooks claude-code`, plus a `kbx hook claude-code post-tool-use` handler that refreshes edited files after Write/Edit/MultiEdit.
+- Claude Code plugin package under `plugins/claude-code/kbx`, plus a hook adapter via `kbx agent hooks claude-code` and a `kbx hook claude-code post-tool-use` handler that refreshes edited files after Write/Edit/MultiEdit.
 - Generic `kbx hook files refresh` handler for clients that expose stable post-edit hooks but do not yet have a first-class adapter.
 - MCP adapter config template validation in `doctor`.
 - Test coverage for adapters, chunking, config, files, indexing, MCP tools, source handling, model catalog, search, vector store, and workspace behavior.

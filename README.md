@@ -148,9 +148,30 @@ kbx mcp config codex
 kbx mcp config zed
 kbx agent guide
 kbx agent hooks claude-code
+kbx agent plugin claude-code
 ```
 
-Claude Code hooks are generated directly. Other clients can integrate with the generic file refresh hook when they expose a stable post-edit lifecycle hook:
+Claude Code can use either direct MCP/hook snippets or the packaged plugin under `plugins/claude-code/kbx`. The plugin includes MCP server config, a PostToolUse refresh hook, a `kbx-dev-mode` skill, and a `/kbx:kbx-status` command. Test it locally with:
+
+```bash
+claude --plugin-dir ./plugins/claude-code/kbx
+```
+
+Install it through the repository marketplace from inside Claude Code:
+
+```text
+/plugin marketplace add ./
+/plugin install kbx@kbx-tools
+```
+
+Claude Desktop / Claude MCP config and Codex CLI use MCP snippets:
+
+```bash
+kbx mcp config claude
+kbx mcp config codex
+```
+
+Other clients can integrate with the generic file refresh hook when they expose a stable post-edit lifecycle hook:
 
 ```bash
 printf '{"paths":["src/app.ts"]}' | kbx hook files refresh
@@ -213,7 +234,7 @@ A tiny example corpus lives under `examples/retrieval-eval/`.
 
 ## npm Release
 
-`kbx` is distributed as an npm CLI and is intended to run directly through `npx -y kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with provenance, and creates a Conventional Commits changelog release with `changelogithub`.
+`kbx` is distributed as an npm CLI and is intended to run directly through `npx -y kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, Claude Code plugin metadata, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with provenance, and creates a Conventional Commits changelog release with `changelogithub`.
 
 Public releases start at `v0.1.0`. The package version, `src/version.ts`, and Git tag must match exactly before a release tag is pushed.
 

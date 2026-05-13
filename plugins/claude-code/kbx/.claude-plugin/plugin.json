@@ -1,0 +1,10 @@
+{
+  "name": "kbx",
+  "description": "Local-first workspace knowledge, freshness hooks, and opt-in dev reports for Claude Code.",
+  "version": "0.1.1",
+  "author": {
+    "name": "kbx"
+  },
+  "license": "MIT",
+  "keywords": ["mcp", "local-first", "knowledge-base", "retrieval", "dev-reports"]
+}

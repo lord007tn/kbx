@@ -25,7 +25,9 @@
   },
   "files": [
     "dist/cli.mjs",
-    "dist/cli.d.mts"
+    "dist/cli.d.mts",
+    ".claude-plugin/marketplace.json",
+    "plugins/claude-code/kbx"
   ],
   "engines": {
     "node": ">=20.19.0"

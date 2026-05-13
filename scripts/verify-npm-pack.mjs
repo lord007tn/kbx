@@ -9,9 +9,16 @@ const maxPackageSizeBytes = Number.parseInt(process.env.KBX_NPM_PACK_MAX_BYTES ?
 const allowedFiles = new Set([
   "LICENSE",
   "README.md",
+  ".claude-plugin/marketplace.json",
   "dist/cli.d.mts",
   "dist/cli.mjs",
-  "package.json"
+  "package.json",
+  "plugins/claude-code/kbx/.claude-plugin/plugin.json",
+  "plugins/claude-code/kbx/.mcp.json",
+  "plugins/claude-code/kbx/README.md",
+  "plugins/claude-code/kbx/commands/kbx-status.md",
+  "plugins/claude-code/kbx/hooks/hooks.json",
+  "plugins/claude-code/kbx/skills/kbx-dev-mode/SKILL.md"
 ]);
 
 const { stdout } = await exec(npmCommand, [...npmPrefix, "pack", "--dry-run", "--json"], { windowsHide: true });
