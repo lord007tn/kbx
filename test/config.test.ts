@@ -54,6 +54,12 @@ test("config controls background watch auto-start", () => {
   assert.throws(() => setConfigValue(defaultConfig, "watch.auto", "yes"), /disabled or enabled/);
 });
 
+test("config controls opt-in dev reports", () => {
+  const config = setConfigValue(defaultConfig, "dev.report", "enabled");
+  assert.equal(getConfigValue(config, "dev.report"), "enabled");
+  assert.throws(() => setConfigValue(defaultConfig, "dev.report", "yes"), /disabled or enabled/);
+});
+
 test("user config stores init root preference", () => {
   const config = setUserConfigValue(defaultUserConfig, "init.root_preference", "git-root");
   assert.equal(getUserConfigValue(config, "init.root_preference"), "git-root");

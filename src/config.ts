@@ -12,7 +12,8 @@ const CONFIG_KEYS = new Set([
   "sessions.index_events",
   "graph.enabled",
   "graph.max_chunks",
-  "watch.auto"
+  "watch.auto",
+  "dev.report"
 ]);
 const USER_CONFIG_KEYS = new Set(["init.root_preference"]);
 
@@ -89,6 +90,12 @@ export function setConfigValue(config: WorkspaceConfig, key: string, rawValue: s
         throw new Error("watch.auto must be disabled or enabled");
       }
       next.watch.auto = rawValue;
+      break;
+    case "dev.report":
+      if (rawValue !== "disabled" && rawValue !== "enabled") {
+        throw new Error("dev.report must be disabled or enabled");
+      }
+      next.dev.report = rawValue;
       break;
   }
 

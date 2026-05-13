@@ -186,6 +186,35 @@ test("CLI background watch keeps the index fresh and can be stopped", async () =
   }
 });
 
+test("CLI dev report is opt-in and writes local debug reports", async () => {
+  const fixture = await createFixture("kbx-cli-dev-report-");
+  try {
+    await runCli(fixture, ["init", "--here", "--model", "minilm"]);
+
+    const skipped = await runCli(fixture, [
+      "dev", "report", "add",
+      "--task", "test task",
+      "--summary", "disabled report"
+    ]);
+    assert.match(skipped.stdout, /Dev report skipped/);
+
+    await runCli(fixture, ["config", "set", "dev.report", "enabled"]);
+    const saved = await runCli(fixture, [
+      "dev", "report", "add",
+      "--task", "test task",
+      "--summary", "saved report",
+      "--issue", "rough edge",
+      "--good", "useful context"
+    ]);
+    assert.match(saved.stdout, /Saved dev report: \.kbx\/debug\/reports\/.+\.md/);
+
+    const listed = await runCli(fixture, ["dev", "report", "list"]);
+    assert.match(listed.stdout, /saved report/);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 interface Fixture {
   root: string;
   workspace: string;

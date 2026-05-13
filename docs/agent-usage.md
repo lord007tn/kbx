@@ -28,6 +28,10 @@ Use `kbx_memory_add` only for compact decisions, preferences, handoffs, and even
 
 Use `kbx_memory_list` to inspect retained notes. Retained notes are stored under `.kbx/sessions`, indexed as `session-memory:*` sources, and retrieved through normal `kbx_search` calls.
 
+## Dev Reports
+
+Use `kbx_dev_report_add` only when the user has opted in with `dev.report=enabled` or explicitly asks to save a kbx dev report. Keep it short: task, summary, issues, findings, good points, and next steps. Reports are local debug artifacts under `.kbx/debug/reports`.
+
 ## Durable Sessions
 
 Durable session capture is opt-in. Use `sessions.capture=metadata` for tool/event summaries and `sessions.capture=full` only when the user wants local raw payload capture. The session event store is separate from the search index and lives under `.kbx/sessions.db`.

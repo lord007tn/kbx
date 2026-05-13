@@ -15,6 +15,7 @@ This document records what is already present in the current `kbx` codebase so t
 - Image ingest for PNG/JPEG/WebP/GIF/TIFF/BMP extensions, with PNG text metadata extraction and optional OCR through `tesseract` or `KBX_OCR_COMMAND`.
 - External import snapshots with `--allow-external`, stored under `.kbx/imports/`.
 - Optional compact session memory source with explicit per-entry retention, stored under `.kbx/sessions/`.
+- Optional dev reports for kbx-assisted Codex runs, stored under `.kbx/debug/reports/`.
 - Opt-in durable session event store under `.kbx/sessions.db` with metadata/full capture modes, retention pruning, redaction, checkpoints, and read-only replay.
 - Session rewind preview/apply from captured file snapshots with exact confirmation tokens.
 - Deterministic graph knowledge store under `.kbx/graph.db`, rebuilt from indexed chunks with file, heading, symbol, package dependency, and retained-memory nodes.
@@ -44,6 +45,7 @@ This document records what is already present in the current `kbx` codebase so t
 - MCP durable-session write tools: `kbx_session_record_event` and `kbx_session_checkpoint`.
 - MCP graph rebuild tool: `kbx_graph_build`.
 - MCP maintenance tools: `kbx_refresh_index`, `kbx_refresh_file`, `kbx_watch_status`, and `kbx_mcp_config`.
+- MCP dev report tools: `kbx_dev_report_add` and `kbx_dev_report_list`.
 - MCP search opportunistically refreshes stale indexed content when the detected change count is within the bounded MCP refresh budget.
 - Gated destructive MCP tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, `kbx_delete_workspace_kb`, and `kbx_rewind_apply`.
 - MCP prompt/resource guidance for agent usage.

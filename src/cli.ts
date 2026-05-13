@@ -6,6 +6,7 @@ import path from "node:path";
 import { KBX_AGENT_GUIDE } from "./agent-guide";
 import { getConfigValue, getUserConfigValue, listConfigValues, listUserConfigValues, setConfigValue, setUserConfigValue } from "./config";
 import { buildWorkspaceContext, formatWorkspaceContextMarkdown } from "./context";
+import { addDevReport, listDevReports } from "./dev-report";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
 import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, refreshWorkspaceIndex, removeSource, resetWorkspaceIndex, resolveSourceEntry, scanWorkspaceFreshness, type IngestProgressEvent, type IngestResult } from "./indexer";
@@ -608,6 +609,88 @@ The generated hook config is additive. Merge it with existing client settings.
     console.log(snippet.content);
   });
 
+const devCommand = program
+  .command("dev")
+  .description("Developer-mode helpers.")
+  .summary("Record opt-in local debug reports for kbx-assisted Codex sessions.");
+
+const devReportCommand = devCommand
+  .command("report")
+  .description("Manage opt-in kbx dev reports.")
+  .summary("Save or list small local reports under .kbx/debug/reports.");
+
+devReportCommand
+  .command("add")
+  .description("Save a small local dev report when dev.report is enabled.")
+  .requiredOption("--task <text>", "task or request that was handled")
+  .requiredOption("--summary <text>", "short summary of what happened")
+  .option("--issue <text>", "issue, risk, or problem observed; repeatable", collectOption, [])
+  .option("--finding <text>", "neutral finding or observation; repeatable", collectOption, [])
+  .option("--good <text>", "thing that worked well; repeatable", collectOption, [])
+  .option("--next <text>", "suggested follow-up; repeatable", collectOption, [])
+  .option("--source <name>", "report source", "codex")
+  .option("--json", "output structured JSON")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx config set dev.report enabled
+  $ kbx dev report add --task "fix search" --summary "Updated search tests" --good "MCP context was relevant"
+
+Reports are disabled by default and are stored locally under .kbx/debug/reports.
+`)
+  .action(async (options: {
+    task: string;
+    summary: string;
+    issue: string[];
+    finding: string[];
+    good: string[];
+    next: string[];
+    source: string;
+    json?: boolean;
+  }) => {
+    const workspace = await requireWorkspace();
+    const report = await addDevReport(workspace, {
+      task: options.task,
+      summary: options.summary,
+      issues: options.issue,
+      findings: options.finding,
+      good: options.good,
+      next: options.next,
+      source: options.source
+    });
+    if (options.json === true) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    if (report.skipped) {
+      console.log("Dev report skipped: dev.report is disabled. Enable with `kbx config set dev.report enabled`.");
+      return;
+    }
+    console.log(`Saved dev report: ${report.relative_path}`);
+  });
+
+devReportCommand
+  .command("list")
+  .description("List recent local dev reports.")
+  .option("--limit <number>", "maximum reports to list", parsePositiveInteger, 20)
+  .option("--json", "output structured JSON")
+  .action(async (options: { limit: number; json?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const reports = await listDevReports(workspace, options.limit);
+    if (options.json === true) {
+      console.log(JSON.stringify({ reports }, null, 2));
+      return;
+    }
+    if (reports.length === 0) {
+      console.log("No dev reports.");
+      return;
+    }
+    for (const [index, report] of reports.entries()) {
+      console.log(`${index + 1}. ${report.relative_path}`);
+      console.log(indent(report.preview));
+    }
+  });
+
 program
   .command("config")
   .description("View or edit workspace config.")
@@ -625,11 +708,12 @@ Examples:
   $ kbx config set mcp.citations full-path
   $ kbx config set mcp.destructive_tools enabled
   $ kbx config set watch.auto enabled
+  $ kbx config set dev.report enabled
   $ kbx config set init.root_preference git-root --global
 
 Keys:
   chunk.size, chunk.overlap, chunk.strategy (heading|fixed|sentence), mcp.citations, mcp.destructive_tools
-  sessions.*, graph.*, watch.auto (disabled|enabled), init.root_preference (--global)
+  sessions.*, graph.*, watch.auto, dev.report (disabled|enabled), init.root_preference (--global)
 `)
   .action(async (action: string, key?: string, value?: string, options?: { global?: boolean }) => {
     if (options?.global === true || key?.startsWith("init.")) {

@@ -49,6 +49,9 @@ export const defaultConfig: WorkspaceConfig = {
   },
   watch: {
     auto: "disabled"
+  },
+  dev: {
+    report: "disabled"
   }
 };
 
@@ -168,6 +171,10 @@ export async function loadConfig(workspace: Workspace): Promise<WorkspaceConfig>
     watch: {
       ...defaultConfig.watch,
       ...stored.watch
+    },
+    dev: {
+      ...defaultConfig.dev,
+      ...stored.dev
     }
   };
 }

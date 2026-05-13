@@ -41,6 +41,8 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
     "kbx_agent_guide",
     "kbx_context",
     "kbx_delete_workspace_kb",
+    "kbx_dev_report_add",
+    "kbx_dev_report_list",
     "kbx_forget_workspace",
     "kbx_get_chunk",
     "kbx_graph_build",
@@ -276,6 +278,47 @@ test("kbx_watch_status reports freshness and CLI watcher guidance", async () => 
       deleted: 0,
       newFiles: 0
     });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_dev_report_add respects opt-in config", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-dev-report-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const skippedResponse = await callTool(server, "kbx_dev_report_add", {
+      task: "test task",
+      summary: "should not persist while disabled"
+    });
+    const skipped = JSON.parse(skippedResponse.content[0]!.text) as { report: { skipped?: boolean; reason?: string } };
+    assert.equal(skipped.report.skipped, true);
+    assert.equal(skipped.report.reason, "dev_report_disabled");
+
+    await writeJson(fixture.workspace.configPath, {
+      ...defaultConfig,
+      dev: {
+        ...defaultConfig.dev,
+        report: "enabled"
+      }
+    });
+    const savedResponse = await callTool(server, "kbx_dev_report_add", {
+      task: "test task",
+      summary: "saved report",
+      issues: ["one issue"],
+      findings: ["one finding"],
+      good: ["one good point"]
+    });
+    const saved = JSON.parse(savedResponse.content[0]!.text) as { report: { relative_path: string; skipped?: boolean } };
+    assert.equal(saved.report.skipped, undefined);
+    assert.match(saved.report.relative_path, /^\.kbx\/debug\/reports\/.+\.md$/);
+
+    const listResponse = await callTool(server, "kbx_dev_report_list", {});
+    const listed = JSON.parse(listResponse.content[0]!.text) as { reports: Array<{ preview: string }> };
+    assert.equal(listed.reports.length, 1);
+    assert.match(listed.reports[0]!.preview, /saved report/);
   } finally {
     await fixture.cleanup();
   }

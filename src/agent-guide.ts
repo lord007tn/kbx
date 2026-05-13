@@ -22,6 +22,11 @@ Memory workflow:
 - Use kbx_memory_list to inspect retained notes. Retained notes are indexed as session-memory sources and are searchable like other chunks.
 - Do not store full hidden transcripts in kbx_memory_add.
 
+Dev report workflow:
+- Dev reports are opt-in. Use kbx_dev_report_add only when dev.report=enabled or the user explicitly asks to save a report.
+- Keep reports short: task, summary, issues, findings, good points, and next steps.
+- Reports are local debug artifacts under .kbx/debug/reports and are not session memory unless separately indexed or saved.
+
 Session workflow:
 - Durable sessions are opt-in. Use kbx_session_record_event for explicit local event capture and kbx_session_checkpoint for named progress markers.
 - Use kbx_session_replay for read-only timelines.
@@ -31,4 +36,4 @@ Destructive tools are disabled unless the workspace sets mcp.destructive_tools=e
 
 Do not use kbx as a substitute for live web lookup. It only retrieves local indexed workspace content.`;
 
-export const KBX_MCP_INSTRUCTIONS = `Use kbx for local workspace knowledge before asking the user to paste files or running broad shell searches. Start with kbx_context for task-level context, kbx_search for focused lookup, kbx_graph_query for relationships, kbx_get_chunk for specific full chunks, and kbx_index_status or kbx_watch_status when freshness is uncertain. Search results are local indexed content, not live web data. Durable session capture is opt-in. Destructive tools require mcp.destructive_tools=enabled and the exact confirmation token returned by the tool error.`;
+export const KBX_MCP_INSTRUCTIONS = `Use kbx for local workspace knowledge before asking the user to paste files or running broad shell searches. Start with kbx_context for task-level context, kbx_search for focused lookup, kbx_graph_query for relationships, kbx_get_chunk for specific full chunks, and kbx_index_status or kbx_watch_status when freshness is uncertain. Search results are local indexed content, not live web data. Durable session capture and dev reports are opt-in. When dev.report=enabled and the user wants kbx dev-mode feedback, call kbx_dev_report_add near task completion with a short report. Destructive tools require mcp.destructive_tools=enabled and the exact confirmation token returned by the tool error.`;

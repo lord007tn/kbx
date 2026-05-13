@@ -81,6 +81,8 @@ kbx rewind preview <session-id>
 kbx stats --fresh
 kbx config set chunk.strategy sentence
 kbx config set watch.auto enabled
+kbx config set dev.report enabled
+kbx dev report add --task "fix retrieval" --summary "Used kbx context and updated tests" --good "Relevant chunks were easy to cite"
 kbx config set init.root_preference git-root --global
 kbx model list
 kbx model benchmark
@@ -181,11 +183,15 @@ Tools exposed:
 - `kbx_refresh_index`
 - `kbx_refresh_file`
 - `kbx_mcp_config`
+- `kbx_dev_report_add`
+- `kbx_dev_report_list`
 - gated destructive tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, `kbx_delete_workspace_kb`, `kbx_rewind_apply`
 
 `kbx_context` returns a bounded, grouped markdown context bundle for task-level use. `kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. They opportunistically refresh changed indexed content when the change count is small, so the search tools are not advertised as read-only to MCP clients. Use `kbx_refresh_index`, `kbx watch`, or `kbx config set watch.auto enabled` for larger continuous updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes initialization instructions, a `kbx_usage` prompt, and a `kbx://usage` resource with agent guidance.
 
 `kbx_session_handoff` returns a compact workspace/index summary for session start or handoff. Durable session capture is opt-in through `sessions.capture`; session events, checkpoints, and rewind snapshots are stored in `.kbx/sessions.db`. `kbx_memory_add` lets an agent save explicit compact decisions, preferences, or handoff notes with a required retention period; those notes are stored under `.kbx/sessions` and become searchable after indexing.
+
+`kbx_dev_report_add` and `kbx dev report add` save short local Codex/kbx feedback reports under `.kbx/debug/reports` only when `dev.report=enabled`. Use this for opt-in development-mode notes about issues, findings, good behavior, and follow-ups from a kbx-assisted agent run.
 
 Search uses deterministic hybrid retrieval by default. Optional model or LLM reranking can be layered in with an external command:
 

@@ -5,6 +5,7 @@ import { KBX_AGENT_GUIDE, KBX_MCP_INSTRUCTIONS } from "./agent-guide";
 import { generateAdapterConfig, listAdapters } from "./adapters";
 import { currentBranchContext } from "./branch";
 import { buildWorkspaceContext, formatWorkspaceContextMarkdown } from "./context";
+import { addDevReport, listDevReports } from "./dev-report";
 import { runDoctor } from "./doctor";
 import { buildGraph, graphStats, queryGraph } from "./graph-store";
 import {
@@ -315,6 +316,59 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         freshness
       }, null, 2));
     }
+  );
+
+  server.registerTool(
+    "kbx_dev_report_add",
+    {
+      description: "Save a small opt-in kbx dev report under .kbx/debug/reports. No report is written unless dev.report is enabled.",
+      inputSchema: {
+        task: z.string().trim().min(1).max(1000).describe("Task or request that was handled"),
+        summary: z.string().trim().min(1).max(4000).describe("Short summary of what happened"),
+        issues: z.array(z.string().trim().min(1).max(1000)).max(20).optional().describe("Issues, risks, or problems observed"),
+        findings: z.array(z.string().trim().min(1).max(1000)).max(20).optional().describe("Neutral findings or observations"),
+        good: z.array(z.string().trim().min(1).max(1000)).max(20).optional().describe("Things that worked well"),
+        next: z.array(z.string().trim().min(1).max(1000)).max(20).optional().describe("Suggested follow-ups"),
+        source: z.string().trim().min(1).max(80).optional().describe("Report source, usually codex")
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ task, summary, issues, findings, good, next, source }) => {
+      const report = await addDevReport(workspace, {
+        task,
+        summary,
+        issues,
+        findings,
+        good,
+        next,
+        source: source ?? "codex"
+      });
+      return textResult(JSON.stringify({
+        report,
+        next: report.skipped ? "Enable with `kbx config set dev.report enabled` before expecting reports to be saved." : "Report saved locally."
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_dev_report_list",
+    {
+      description: "List recent local kbx dev reports from .kbx/debug/reports.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ limit }) => textResult(JSON.stringify({
+      reports: await listDevReports(workspace, limit ?? 20)
+    }, null, 2))
   );
 
   server.registerTool(

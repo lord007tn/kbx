@@ -35,6 +35,9 @@ export interface WorkspaceConfig {
   watch: {
     auto: "disabled" | "enabled";
   };
+  dev: {
+    report: "disabled" | "enabled";
+  };
 }
 
 export interface UserConfig {
