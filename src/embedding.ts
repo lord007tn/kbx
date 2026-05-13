@@ -9,7 +9,7 @@ export interface Embedder {
 }
 
 export function createEmbedder(model = DEFAULT_MODEL_ID, dim = DEFAULT_MODEL_DIM): Embedder {
-  if (process.env.KBX_EMBEDDER === "hash") {
+  if (model === "hash" || process.env.KBX_EMBEDDER === "hash") {
     return new HashEmbedder(model, dim);
   }
   return new TransformersEmbedder(model, dim);

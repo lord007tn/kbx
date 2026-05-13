@@ -1,6 +1,18 @@
 import type { UserConfig, WorkspaceConfig } from "./types";
 
-const CONFIG_KEYS = new Set(["chunk.size", "chunk.overlap", "chunk.strategy", "mcp.citations", "mcp.destructive_tools"]);
+const CONFIG_KEYS = new Set([
+  "chunk.size",
+  "chunk.overlap",
+  "chunk.strategy",
+  "mcp.citations",
+  "mcp.destructive_tools",
+  "sessions.capture",
+  "sessions.retention_days",
+  "sessions.max_event_bytes",
+  "sessions.index_events",
+  "graph.enabled",
+  "graph.max_chunks"
+]);
 const USER_CONFIG_KEYS = new Set(["init.root_preference"]);
 
 export function getConfigValue(config: WorkspaceConfig, key: string): unknown {
@@ -43,6 +55,33 @@ export function setConfigValue(config: WorkspaceConfig, key: string, rawValue: s
         throw new Error("mcp.destructive_tools must be disabled or enabled");
       }
       next.mcp.destructive_tools = rawValue;
+      break;
+    case "sessions.capture":
+      if (rawValue !== "disabled" && rawValue !== "metadata" && rawValue !== "full") {
+        throw new Error("sessions.capture must be disabled, metadata, or full");
+      }
+      next.sessions.capture = rawValue;
+      break;
+    case "sessions.retention_days":
+      next.sessions.retention_days = parsePositiveInteger(rawValue, key);
+      break;
+    case "sessions.max_event_bytes":
+      next.sessions.max_event_bytes = parsePositiveInteger(rawValue, key);
+      break;
+    case "sessions.index_events":
+      if (rawValue !== "disabled" && rawValue !== "summaries") {
+        throw new Error("sessions.index_events must be disabled or summaries");
+      }
+      next.sessions.index_events = rawValue;
+      break;
+    case "graph.enabled":
+      if (rawValue !== "disabled" && rawValue !== "enabled") {
+        throw new Error("graph.enabled must be disabled or enabled");
+      }
+      next.graph.enabled = rawValue;
+      break;
+    case "graph.max_chunks":
+      next.graph.max_chunks = parsePositiveInteger(rawValue, key);
       break;
   }
 

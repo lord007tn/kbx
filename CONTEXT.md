@@ -128,6 +128,22 @@ _Avoid_: Hidden full transcript indexing
 The policy that decides how long **Session Memory Source** entries remain searchable.
 _Avoid_: Permanent session capture by default
 
+**Session Handoff**:
+A read-only summary of workspace identity, index state, freshness, recent indexed sources, and explicit retained memory notes for starting or ending agent work.
+_Avoid_: Full transcript replay
+
+**Session Event Store**:
+A local opt-in append-only SQLite store of agent lifecycle events, tool calls, prompts, bounded outputs, file snapshots, checkpoints, and retention policy.
+_Avoid_: Hidden capture through search index chunks
+
+**Session Rewind**:
+A preview-first ability to restore workspace files from explicit session file snapshots after exact confirmation.
+_Avoid_: Default automatic workspace rollback
+
+**Graph Knowledge**:
+A deterministic entity-relation layer extracted from indexed chunks and retained notes with provenance back to chunk IDs.
+_Avoid_: Uncited graph facts
+
 **Human Source**:
 A user-facing source label shown in local CLI search results.
 _Avoid_: Internal import path
@@ -254,6 +270,10 @@ _Avoid_: Merged global index
 - **Session Memory Source** is optional and separate from workspace files and **External Import** content.
 - **Session Memory Source** stores compact session memory, not complete hidden transcripts.
 - **Session Memory Retention** must be explicit before session memory is enabled by default.
+- **Session Handoff** summarizes current workspace/index state and retained memory note metadata without reading hidden transcripts.
+- **Session Event Store** is required before **Session Rewind** can exist.
+- **Session Rewind** has a read-only replay level and a higher-risk workspace restore level; workspace restore requires explicit snapshots or VCS-backed patches.
+- **Graph Knowledge** depends on stable provenance back to chunks, retained memory notes, or session events.
 - **Human Source** is used in local CLI output; **Citation Source** is used in MCP citations.
 - **Citation Source** hides absolute external paths by default.
 - **Citation Mode** defaults to safe and can be changed to full-path when MCP clients need precise paths.

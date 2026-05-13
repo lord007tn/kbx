@@ -1,9 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { KBX_AGENT_GUIDE } from "./agent-guide";
+import { KBX_AGENT_GUIDE, KBX_MCP_INSTRUCTIONS } from "./agent-guide";
 import { generateAdapterConfig, listAdapters } from "./adapters";
+import { currentBranchContext } from "./branch";
+import { buildWorkspaceContext, formatWorkspaceContextMarkdown } from "./context";
 import { runDoctor } from "./doctor";
+import { buildGraph, graphStats, queryGraph } from "./graph-store";
 import {
   deleteWorkspaceKnowledgeBase,
   forgetWorkspace,
@@ -13,6 +16,7 @@ import {
   type Workspace
 } from "./workspace";
 import {
+  ingestSource,
   loadIndexStats,
   refreshWorkspaceFreshness,
   refreshWorkspaceFile,
@@ -22,16 +26,31 @@ import {
   scanWorkspaceFreshness
 } from "./indexer";
 import { searchRegisteredWorkspaces, searchWorkspace } from "./search";
+import { addSessionMemory, listSessionMemories, sessionMemorySource } from "./session-memory";
+import {
+  addSessionCheckpoint,
+  appendSessionEvent,
+  applySessionRewind,
+  getSession,
+  listSessionEvents,
+  listSessions,
+  previewSessionRewind,
+  sessionTimeline
+} from "./session-store";
 import { LexicalIndexStore } from "./lexical-index";
 import { KBX_VERSION } from "./version";
+import type { IndexStats, SourceEntry } from "./types";
 
 const DEFAULT_SEARCH_PREVIEW_CHARS = 360;
 const MCP_SEARCH_AUTO_REFRESH_MAX_CHANGES = 25;
+const sessionEventTypeSchema = z.enum(["prompt", "assistant", "tool", "file_edit", "checkpoint", "note", "error", "other"]);
 
 export async function runMcpServer(workspace: Workspace): Promise<void> {
   const server = new McpServer({
     name: "kbx",
     version: KBX_VERSION
+  }, {
+    instructions: KBX_MCP_INSTRUCTIONS
   });
 
   registerGuidance(server);
@@ -119,6 +138,31 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         searches,
         next: "Call kbx_get_chunk for any result you plan to quote or rely on."
       }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_context",
+    {
+      description: "Build a bounded task-context bundle from local kbx search results. Returns grouped full chunks with citations in one call.",
+      inputSchema: {
+        query: z.string().trim().min(1).describe("Task or topic to build context for"),
+        top_k: z.number().int().min(1).max(25).optional().describe("Number of chunks to include"),
+        max_chars: z.number().int().min(1000).max(60000).optional().describe("Maximum markdown characters to return")
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ query, top_k, max_chars }) => {
+      const freshness = await autoRefreshForSearch(workspace);
+      const context = await buildWorkspaceContext(workspace, query, {
+        topK: top_k ?? 8,
+        maxChars: max_chars ?? 16000
+      });
+      return textResult(`${formatWorkspaceContextMarkdown(context)}\n\n---\nFreshness: ${JSON.stringify(freshness)}`);
     }
   );
 
@@ -273,6 +317,333 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         freshness
       }, null, 2));
     }
+  );
+
+  server.registerTool(
+    "kbx_memory_add",
+    {
+      description: "Explicitly save a compact, retention-bound session memory note and index it for later kbx search.",
+      inputSchema: {
+        text: z.string().trim().min(1).max(10000).describe("Compact note, decision, handoff, or event to retain"),
+        title: z.string().trim().min(1).max(120).optional().describe("Short title for the retained note"),
+        retention_days: z.number().int().min(1).max(3650).describe("Number of days before the note expires")
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ text, title, retention_days }) => {
+      const { entry, source } = await addSessionMemory(workspace, {
+        text,
+        title,
+        retentionDays: retention_days
+      });
+      const indexed = await ingestSource(workspace, source);
+      return textResult(JSON.stringify({
+        memory: entry,
+        source,
+        indexed,
+        next: "Use kbx_search to retrieve this memory later by title, decision text, or related terms."
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_memory_list",
+    {
+      description: "List explicit compact session memory notes retained in this workspace.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => {
+      const [entries, sources] = await Promise.all([
+        listSessionMemories(workspace),
+        loadSources(workspace)
+      ]);
+      const source = sessionMemorySource(sources);
+      return textResult(JSON.stringify({
+        retention_days: source?.retention_days ?? null,
+        entries
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_session_handoff",
+    {
+      description: "Return a compact workspace handoff for starting or ending an agent session. Does not capture hidden transcripts.",
+      inputSchema: {
+        source_limit: z.number().int().min(1).max(50).optional().describe("Maximum recent indexed files to include"),
+        memory_limit: z.number().int().min(1).max(50).optional().describe("Maximum retained memory notes to include")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ source_limit, memory_limit }) => {
+      return textResult(JSON.stringify(
+        await buildSessionHandoff(workspace, {
+          sourceLimit: source_limit ?? 10,
+          memoryLimit: memory_limit ?? 10
+        }),
+        null,
+        2
+      ));
+    }
+  );
+
+  server.registerTool(
+    "kbx_session_list",
+    {
+      description: "List recent durable kbx session records.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ limit }) => textResult(JSON.stringify({
+      sessions: await listSessions(workspace, { limit: limit ?? 20 })
+    }, null, 2))
+  );
+
+  server.registerTool(
+    "kbx_session_show",
+    {
+      description: "Show one durable kbx session record.",
+      inputSchema: {
+        session_id: z.string().min(1)
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id }) => {
+      const session = await getSession(workspace, session_id);
+      if (!session) {
+        return textResult(JSON.stringify({ error: "session_not_found", session_id }, null, 2), true);
+      }
+      return textResult(JSON.stringify({ session }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_session_events",
+    {
+      description: "List recorded events for one durable kbx session.",
+      inputSchema: {
+        session_id: z.string().min(1),
+        limit: z.number().int().min(1).max(1000).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id, limit }) => textResult(JSON.stringify({
+      session_id,
+      events: await listSessionEvents(workspace, session_id, { limit: limit ?? 500 })
+    }, null, 2))
+  );
+
+  server.registerTool(
+    "kbx_session_record_event",
+    {
+      description: "Record one opt-in durable session event. Raw payloads are only stored when sessions.capture=full.",
+      inputSchema: {
+        session_id: z.string().min(1),
+        type: sessionEventTypeSchema,
+        summary: z.string().trim().min(1).max(500).optional(),
+        tool_name: z.string().trim().min(1).max(120).optional(),
+        input: z.unknown().optional(),
+        output: z.unknown().optional(),
+        error: z.string().max(2000).optional(),
+        files: z.array(z.object({
+          path: z.string().min(1),
+          operation: z.string().min(1).max(40).optional()
+        })).max(50).optional(),
+        snapshots: z.array(z.object({
+          path: z.string().min(1),
+          before_text: z.string().nullable().optional(),
+          after_text: z.string().nullable().optional()
+        })).max(20).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id, type, summary, tool_name, input, output, error, files, snapshots }) => {
+      const result = await appendSessionEvent(workspace, {
+        sessionId: session_id,
+        type,
+        summary,
+        toolName: tool_name,
+        input,
+        output,
+        error,
+        files: files?.map((file) => ({
+          path: file.path,
+          operation: file.operation ?? "edit"
+        })),
+        snapshots: snapshots?.map((snapshot) => ({
+          path: snapshot.path,
+          beforeText: snapshot.before_text ?? null,
+          afterText: snapshot.after_text ?? null
+        }))
+      });
+      return textResult(JSON.stringify(result, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_session_checkpoint",
+    {
+      description: "Add a named checkpoint to a durable session timeline.",
+      inputSchema: {
+        session_id: z.string().min(1),
+        name: z.string().trim().min(1).max(120),
+        note: z.string().trim().max(2000).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id, name, note }) => textResult(JSON.stringify(
+      await addSessionCheckpoint(workspace, session_id, name, note),
+      null,
+      2
+    ))
+  );
+
+  server.registerTool(
+    "kbx_session_replay",
+    {
+      description: "Return a read-only durable session timeline with events and checkpoints.",
+      inputSchema: {
+        session_id: z.string().min(1)
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id }) => textResult(JSON.stringify({
+      session_id,
+      timeline: await sessionTimeline(workspace, session_id)
+    }, null, 2))
+  );
+
+  server.registerTool(
+    "kbx_rewind_preview",
+    {
+      description: "Preview a session rewind from captured file snapshots. Read-only.",
+      inputSchema: {
+        session_id: z.string().min(1)
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id }) => textResult(JSON.stringify(
+      await previewSessionRewind(workspace, session_id),
+      null,
+      2
+    ))
+  );
+
+  server.registerTool(
+    "kbx_rewind_apply",
+    {
+      description: "Destructive: apply a session rewind from captured file snapshots after config gate and exact preview token.",
+      inputSchema: {
+        session_id: z.string().min(1),
+        confirm: z.string().min(1)
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ session_id, confirm }) => {
+      const gate = await requireDestructiveEnabled(workspace, "rewind-session");
+      if (gate) return gate;
+      try {
+        return textResult(JSON.stringify(await applySessionRewind(workspace, session_id, confirm), null, 2));
+      } catch (error) {
+        return textResult(JSON.stringify({
+          error: error instanceof Error && /Invalid confirmation/.test(error.message) ? "invalid_confirmation" : "rewind_failed",
+          detail: error instanceof Error ? error.message : String(error)
+        }, null, 2), true);
+      }
+    }
+  );
+
+  server.registerTool(
+    "kbx_graph_build",
+    {
+      description: "Rebuild deterministic graph knowledge from indexed chunks.",
+      inputSchema: {
+        max_chunks: z.number().int().min(1).max(100000).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ max_chunks }) => textResult(JSON.stringify(
+      await buildGraph(workspace, { maxChunks: max_chunks }),
+      null,
+      2
+    ))
+  );
+
+  server.registerTool(
+    "kbx_graph_query",
+    {
+      description: "Query graph knowledge nodes and immediate relations.",
+      inputSchema: {
+        query: z.string().trim().min(1),
+        limit: z.number().int().min(1).max(100).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ query, limit }) => textResult(JSON.stringify(
+      await queryGraph(workspace, query, { limit: limit ?? 20 }),
+      null,
+      2
+    ))
+  );
+
+  server.registerTool(
+    "kbx_graph_stats",
+    {
+      description: "Report graph knowledge node and edge counts.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => textResult(JSON.stringify(await graphStats(workspace), null, 2))
   );
 
   server.registerTool(
@@ -444,6 +815,87 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
   );
 }
 
+async function buildSessionHandoff(
+  workspace: Workspace,
+  options: { sourceLimit: number; memoryLimit: number }
+) {
+  const [manifest, sources, stats, branch, freshness, memories] = await Promise.all([
+    loadManifest(workspace),
+    loadSources(workspace),
+    loadManifest(workspace).then((m) => loadIndexStats(workspace, m.model, m.dim)),
+    currentBranchContext(workspace.root),
+    scanFreshnessForMcp(workspace),
+    listSessionMemories(workspace)
+  ]);
+
+  return {
+    workspace: {
+      id: manifest.workspace_id,
+      name: manifest.name,
+      path: workspace.root
+    },
+    model: {
+      id: manifest.model,
+      dim: manifest.dim
+    },
+    branch: branch ? {
+      name: branch.name,
+      head: branch.head,
+      scope: branch.scope
+    } : null,
+    index: {
+      files: Object.keys(stats.files).length,
+      chunks: totalIndexedChunks(stats),
+      last_ingest_at: stats.last_ingest_at || null,
+      freshness
+    },
+    sources: sources.map(sourceSummary),
+    recent_sources: recentIndexedSources(stats, options.sourceLimit),
+    session_memories: memories
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, options.memoryLimit),
+    next: [
+      "Run kbx_search for task-specific context before editing unfamiliar code.",
+      "Call kbx_get_chunk for results you plan to quote or rely on.",
+      "Use kbx_memory_add only for compact decisions, preferences, handoffs, or events with explicit retention."
+    ]
+  };
+}
+
+function totalIndexedChunks(stats: IndexStats): number {
+  return Object.values(stats.files).reduce((total, file) => total + file.chunks, 0);
+}
+
+function recentIndexedSources(stats: IndexStats, limit: number) {
+  return Object.entries(stats.files)
+    .map(([source, file]) => ({
+      source: file.relative_path ?? source,
+      chunks: file.chunks,
+      mtime: file.mtime,
+      ...(file.branch_name ? { branch: file.branch_name } : {}),
+      ...(file.git_head ? { git_head: file.git_head } : {})
+    }))
+    .sort((a, b) => b.mtime - a.mtime || a.source.localeCompare(b.source))
+    .slice(0, limit);
+}
+
+function sourceSummary(source: SourceEntry) {
+  return {
+    path: source.path,
+    kind: source.kind,
+    include: source.include,
+    exclude: source.exclude,
+    ...(source.kind === "external_import" ? {
+      original_path: source.original_path,
+      imported_at: source.imported_at
+    } : {}),
+    ...(source.kind === "session_memory" ? {
+      retention_days: source.retention_days,
+      created_at: source.created_at
+    } : {})
+  };
+}
+
 function registerGuidance(server: McpServer): void {
   server.registerPrompt(
     "kbx_usage",
@@ -539,6 +991,18 @@ async function requireDestructiveConfirmation(workspace: Workspace, operation: s
       error: "invalid_confirmation",
       operation,
       required_confirmation: required
+    }, null, 2), true);
+  }
+  return null;
+}
+
+async function requireDestructiveEnabled(workspace: Workspace, operation: string) {
+  const config = await loadConfig(workspace);
+  if (config.mcp.destructive_tools !== "enabled") {
+    return textResult(JSON.stringify({
+      error: "destructive_tools_disabled",
+      operation,
+      required_config: "mcp.destructive_tools=enabled"
     }, null, 2), true);
   }
   return null;

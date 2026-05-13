@@ -22,6 +22,16 @@ export interface WorkspaceConfig {
     citations: "safe" | "full-path";
     destructive_tools: "disabled" | "enabled";
   };
+  sessions: {
+    capture: "disabled" | "metadata" | "full";
+    retention_days: number;
+    max_event_bytes: number;
+    index_events: "disabled" | "summaries";
+  };
+  graph: {
+    enabled: "disabled" | "enabled";
+    max_chunks: number;
+  };
 }
 
 export interface UserConfig {

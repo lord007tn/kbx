@@ -22,6 +22,8 @@ export interface Workspace {
   sourcesPath: string;
   statsPath: string;
   lexicalPath: string;
+  sessionPath: string;
+  graphPath: string;
   collectionDir: string;
 }
 
@@ -34,6 +36,16 @@ export const defaultConfig: WorkspaceConfig = {
   mcp: {
     citations: "safe",
     destructive_tools: "disabled"
+  },
+  sessions: {
+    capture: "disabled",
+    retention_days: 30,
+    max_event_bytes: 16000,
+    index_events: "disabled"
+  },
+  graph: {
+    enabled: "disabled",
+    max_chunks: 20000
   }
 };
 
@@ -54,6 +66,8 @@ export function workspaceFromRoot(root: string): Workspace {
     sourcesPath: path.join(kbxDir, "sources.json"),
     statsPath: path.join(kbxDir, "stats.json"),
     lexicalPath: path.join(kbxDir, "lexical.db"),
+    sessionPath: path.join(kbxDir, "sessions.db"),
+    graphPath: path.join(kbxDir, "graph.db"),
     collectionDir: path.join(kbxDir, "collection")
   };
 }
@@ -139,6 +153,14 @@ export async function loadConfig(workspace: Workspace): Promise<WorkspaceConfig>
     mcp: {
       ...defaultConfig.mcp,
       ...stored.mcp
+    },
+    sessions: {
+      ...defaultConfig.sessions,
+      ...stored.sessions
+    },
+    graph: {
+      ...defaultConfig.graph,
+      ...stored.graph
     }
   };
 }

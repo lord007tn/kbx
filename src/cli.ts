@@ -1,22 +1,39 @@
 #!/usr/bin/env node
-import { confirm, isCancel, progress, select, spinner, type ProgressResult, type SpinnerResult } from "@clack/prompts";
+import { confirm, isCancel, select } from "@clack/prompts";
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { KBX_AGENT_GUIDE } from "./agent-guide";
 import { getConfigValue, getUserConfigValue, listConfigValues, listUserConfigValues, setConfigValue, setUserConfigValue } from "./config";
+import { buildWorkspaceContext, formatWorkspaceContextMarkdown } from "./context";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
-import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, refreshWorkspaceIndex, removeSource, resetWorkspaceIndex, resolveSourceEntry, type IngestProgressEvent, type IngestResult } from "./indexer";
+import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, refreshWorkspaceIndex, removeSource, resetWorkspaceIndex, resolveSourceEntry, scanWorkspaceFreshness, type IngestProgressEvent, type IngestResult } from "./indexer";
 import { runMcpServer } from "./mcp";
 import { cachedModelBenchmark, formatBenchmarkSpeed, isCatalogModelInstalled, loadCatalogModelFromPath, MODEL_CATALOG, modelDetails, resolveModel, type ModelCatalogEntry } from "./models";
 import { searchRegisteredWorkspaces, searchWorkspace } from "./search";
 import { evaluateRetrieval, parseRetrievalEvalCorpus } from "./retrieval-eval";
+import { buildGraph, graphStats, queryGraph } from "./graph-store";
 import { addSessionMemory, listSessionMemories, pruneExpiredSessionMemories, sessionMemorySource } from "./session-memory";
+import {
+  addSessionCheckpoint,
+  appendSessionEvent,
+  applySessionRewind,
+  endSession,
+  getSession,
+  listSessionEvents,
+  listSessions,
+  previewSessionRewind,
+  pruneSessions,
+  sessionTimeline,
+  startSession,
+  type SessionEventType
+} from "./session-store";
 import { KBX_VERSION } from "./version";
 import { watchIngest } from "./watch";
 import { generateAdapterConfig, generateAdapterHooks, listAdapters } from "./adapters";
-import { handleClaudeCodePostToolUse, handleFileRefreshHook } from "./hooks";
+import { handleClaudeCodePostToolUse, handleFileRefreshHook, handleSessionCaptureHook } from "./hooks";
+import { createTerminalProgress } from "./terminal-ui";
 import {
   deleteWorkspaceKnowledgeBase,
   findGitRoot,
@@ -91,6 +108,77 @@ Model IDs:
   });
 
 program
+  .command("setup")
+  .description("Run first-time workspace setup.")
+  .summary("Initialize, choose a model, ingest the workspace, and print an MCP config snippet.")
+  .argument("[path]", "workspace root", ".")
+  .option("--here", "initialize the current directory")
+  .option("--git-root", "initialize the nearest git root")
+  .option("--model <model-id>", "embedding model to use for this workspace")
+  .option("--choose-model", "choose an embedding model interactively")
+  .option("--skip-ingest", "initialize and print config without indexing files")
+  .option("--client <client>", "MCP client adapter to print", "codex")
+  .option("--command <command>", "command to use in generated MCP config", "kbx")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx setup --model minilm
+  $ kbx setup --git-root --client claude-code
+  $ kbx setup --skip-ingest --client cursor
+`)
+  .action(async (
+    targetPath: string,
+    options: {
+      here?: boolean;
+      gitRoot?: boolean;
+      model?: string;
+      chooseModel?: boolean;
+      skipIngest?: boolean;
+      client: string;
+      command: string;
+    }
+  ) => {
+    const root = await resolveInitRoot(targetPath, options);
+    const model = await resolveRequestedModel(options.model, {
+      interactive: options.chooseModel === true || (!options.model && process.stdin.isTTY === true)
+    });
+    const workspace = await initWorkspace(root, model ? { model: model.model, dim: model.dim } : {});
+    const manifest = await loadManifest(workspace);
+
+    console.log(`Workspace: ${manifest.name} (${manifest.workspace_id.slice(0, 8)})`);
+    console.log(`Root: ${workspace.root}`);
+    console.log(`Model: ${modelLabel(manifest.model)} (${manifest.dim}d)`);
+
+    if (options.skipIngest === true) {
+      console.log("Ingest: skipped");
+    } else {
+      const ingestProgress = createIngestProgress();
+      let result: IngestResult;
+      try {
+        result = await ingestWorkspaceTarget(workspace, workspace.root, {
+          onProgress: ingestProgress?.onProgress
+        });
+      } catch (error) {
+        ingestProgress?.error();
+        throw error;
+      } finally {
+        await ingestProgress?.stop();
+      }
+      console.log(`Ingest: indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} skipped/unchanged, ${result.deleted} deleted.`);
+    }
+
+    const snippet = generateAdapterConfig(options.client, {
+      command: options.command,
+      args: ["mcp"]
+    });
+    console.log(`MCP config for ${snippet.clientName} (${snippet.configPath}):`);
+    console.log(snippet.content.trimEnd());
+    for (const note of snippet.notes) {
+      console.log(`# ${note}`);
+    }
+  });
+
+program
   .command("ingest")
   .description("Index text-like files in this workspace.")
   .summary("Refresh the current workspace index from workspace or external sources.")
@@ -135,6 +223,8 @@ Notes:
     } catch (error) {
       ingestProgress?.error();
       throw error;
+    } finally {
+      await ingestProgress?.stop();
     }
     console.log(`Indexed ${result.files} file(s), ${result.chunks} new chunk(s), ${result.skipped} skipped/unchanged file(s), ${result.deleted} deleted file(s).`);
 
@@ -195,7 +285,18 @@ Model or LLM reranking is optional and off by default.
     }
 
     if (options.fresh === true) {
-      const freshness = await refreshWorkspaceFreshness(workspace);
+      const refreshProgress = createIngestProgress();
+      let freshness: Awaited<ReturnType<typeof refreshWorkspaceFreshness>>;
+      try {
+        freshness = await refreshWorkspaceFreshness(workspace, {
+          onProgress: refreshProgress?.onProgress
+        });
+      } catch (error) {
+        refreshProgress?.error();
+        throw error;
+      } finally {
+        await refreshProgress?.stop();
+      }
       if (freshness.refreshed && freshness.refresh) {
         console.error(`Refreshed ${freshness.refresh.files} file(s), ${freshness.refresh.chunks} new chunk(s), ${freshness.refresh.skipped} skipped/unchanged, ${freshness.refresh.deleted} deleted.`);
       }
@@ -218,6 +319,72 @@ Model or LLM reranking is optional and off by default.
       console.log(indent(excerpt(hit.snippet ?? hit.text)));
       console.log("");
     }
+  });
+
+program
+  .command("context")
+  .description("Build a bounded markdown context bundle from search results.")
+  .summary("Search, group, and print full cited chunks for AI task context.")
+  .argument("<query>", "search query")
+  .option("-k, --top-k <number>", "number of chunks to include", parsePositiveInteger, 8)
+  .option("--max-chars <number>", "maximum markdown output characters", parsePositiveInteger, 16000)
+  .option("--fresh", "refresh changed, deleted, or new source files before building context")
+  .option("--json", "output structured JSON instead of markdown")
+  .option("--reranker <mode>", "optional reranker mode: none, local, model, or command", "none")
+  .option("--reranker-model <model>", "Transformers.js feature-extraction model for --reranker model")
+  .option("--reranker-command <command>", "external reranker command that reads JSON from stdin and writes scores JSON")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx context "release workflow"
+  $ kbx context "auth timeout" -k 12 --max-chars 24000
+  $ kbx context "edited file behavior" --fresh
+`)
+  .action(async (
+    query: string,
+    options: {
+      topK: number;
+      maxChars: number;
+      fresh?: boolean;
+      json?: boolean;
+      reranker: "none" | "local" | "model" | "command";
+      rerankerModel?: string;
+      rerankerCommand?: string;
+    }
+  ) => {
+    const workspace = await requireWorkspace();
+
+    if (options.fresh === true) {
+      const refreshProgress = createIngestProgress();
+      try {
+        await refreshWorkspaceFreshness(workspace, {
+          onProgress: refreshProgress?.onProgress
+        });
+      } catch (error) {
+        refreshProgress?.error();
+        throw error;
+      } finally {
+        await refreshProgress?.stop();
+      }
+    }
+
+    const context = await buildWorkspaceContext(workspace, query, {
+      topK: options.topK,
+      maxChars: options.maxChars,
+      citationMode: "full-path",
+      reranker: {
+        mode: options.reranker,
+        model: options.rerankerModel,
+        command: options.rerankerCommand
+      }
+    });
+
+    if (options.json === true) {
+      console.log(JSON.stringify(context, null, 2));
+      return;
+    }
+
+    console.log(formatWorkspaceContextMarkdown(context));
   });
 
 program
@@ -350,6 +517,26 @@ or newline-delimited file paths.
     console.log(JSON.stringify(result));
   });
 
+hookCommand
+  .command("session")
+  .description("Run a generic opt-in session capture hook handler.")
+  .argument("<event>", "hook event handler")
+  .addHelpText("after", `
+
+Examples:
+  $ printf '{"session_id":"abc","tool_name":"Edit"}' | kbx hook session capture
+
+Session capture respects sessions.capture. It is disabled by default.
+`)
+  .action(async (event: string) => {
+    if (event !== "capture") {
+      throw new Error("Unknown session hook event. Supported: capture.");
+    }
+    const input = await readStdin();
+    const result = await handleSessionCaptureHook(input);
+    console.log(JSON.stringify(result));
+  });
+
 const agentCommand = program
   .command("agent")
   .description("Agent helper commands.")
@@ -461,6 +648,93 @@ Keys:
     }
 
     throw new Error("Config action must be get or set.");
+  });
+
+program
+  .command("status")
+  .description("Show workspace, index, source, and freshness status.")
+  .summary("Print a readable status report for the nearest kbx workspace.")
+  .option("--fresh", "scan source files for stale/deleted/new files")
+  .option("--json", "output structured JSON")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx status
+  $ kbx status --fresh
+  $ kbx status --json
+`)
+  .action(async (options: { fresh?: boolean; json?: boolean }) => {
+    const workspace = await findWorkspace(process.cwd());
+    if (!workspace) {
+      if (options.json === true) {
+        console.log(JSON.stringify({ initialized: false, cwd: process.cwd() }, null, 2));
+        return;
+      }
+      console.log("kbx status");
+      console.log("Workspace: not initialized");
+      console.log("Next: run kbx setup or kbx init");
+      return;
+    }
+
+    const [manifest, sources] = await Promise.all([
+      loadManifest(workspace),
+      loadSources(workspace)
+    ]);
+    const stats = await loadIndexStats(workspace, manifest.model, manifest.dim);
+    const indexSize = await directorySizeBytes(workspace.collectionDir);
+    const chunkCount = await vectorChunkCount(workspace, manifest.dim);
+    const freshness = options.fresh === true ? await scanWorkspaceFreshness(workspace) : undefined;
+
+    if (options.json === true) {
+      console.log(JSON.stringify({
+        initialized: true,
+        workspace: {
+          id: manifest.workspace_id,
+          name: manifest.name,
+          path: workspace.root
+        },
+        model: {
+          id: manifest.model,
+          label: modelLabel(manifest.model),
+          dim: manifest.dim
+        },
+        index: {
+          documents: Object.keys(stats.files).length,
+          chunks: chunkCount,
+          size_bytes: indexSize,
+          last_ingest_at: stats.last_ingest_at || null
+        },
+        sources: sources.length,
+        freshness
+      }, null, 2));
+      return;
+    }
+
+    console.log("kbx status");
+    console.log("");
+    console.log("Workspace:");
+    console.log(`  Name:       ${manifest.name} (${manifest.workspace_id.slice(0, 8)})`);
+    console.log(`  Root:       ${workspace.root}`);
+    console.log(`  Model:      ${modelLabel(manifest.model)} (${manifest.dim}d)`);
+    console.log("");
+    console.log("Index:");
+    console.log(`  Documents:  ${Object.keys(stats.files).length}`);
+    console.log(`  Chunks:     ${chunkCount}`);
+    console.log(`  Size:       ${formatBytes(indexSize)}`);
+    console.log(`  Ingested:   ${stats.last_ingest_at || "never"}`);
+    console.log("");
+    console.log("Sources:");
+    console.log(`  Count:      ${sources.length}`);
+    if (freshness) {
+      console.log("");
+      console.log("Freshness:");
+      console.log(`  Stale:      ${freshness.stale}`);
+      console.log(`  Deleted:    ${freshness.deleted}`);
+      console.log(`  New:        ${freshness.newFiles}`);
+      if (freshness.stale + freshness.deleted + freshness.newFiles > 0) {
+        console.log("  Next:       run kbx ingest or kbx doctor --repair");
+      }
+    }
   });
 
 program
@@ -698,6 +972,224 @@ memoryCommand
     console.log(`Pruned ${expired.length} expired session memory note(s).`);
   });
 
+const sessionCommand = program
+  .command("session")
+  .description("Manage opt-in durable agent sessions.")
+  .summary("Start, record, inspect, checkpoint, replay, and prune session event timelines.")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx config set sessions.capture full
+  $ kbx session start --client codex --name "ADR work"
+  $ kbx session record <session-id> --type note --summary "Reviewed replay design"
+  $ kbx session replay <session-id>
+
+Session capture is disabled by default. Use sessions.capture=metadata or full to enable hook capture.
+`);
+
+sessionCommand
+  .command("start")
+  .description("Start a durable session record.")
+  .option("--name <name>", "human label for the session")
+  .option("--client <client>", "agent or client name")
+  .action(async (options: { name?: string; client?: string }) => {
+    const workspace = await requireWorkspace();
+    const session = await startSession(workspace, {
+      name: options.name,
+      client: options.client
+    });
+    console.log(JSON.stringify({ session }, null, 2));
+  });
+
+sessionCommand
+  .command("end")
+  .description("Mark a durable session as ended.")
+  .argument("<session-id>", "session id")
+  .action(async (sessionId: string) => {
+    const workspace = await requireWorkspace();
+    const session = await endSession(workspace, sessionId);
+    console.log(JSON.stringify({ session }, null, 2));
+  });
+
+sessionCommand
+  .command("list")
+  .description("List recent durable sessions.")
+  .option("--limit <number>", "maximum sessions to print", parsePositiveInteger, 50)
+  .action(async (options: { limit: number }) => {
+    const workspace = await requireWorkspace();
+    const sessions = await listSessions(workspace, { limit: options.limit });
+    if (sessions.length === 0) {
+      console.log("No sessions.");
+      return;
+    }
+    for (const session of sessions) {
+      console.log(`${session.id.slice(0, 8)}  ${session.status.padEnd(6)}  ${session.started_at}  ${session.name ?? session.client ?? ""}`);
+    }
+  });
+
+sessionCommand
+  .command("show")
+  .description("Show one durable session.")
+  .argument("<session-id>", "session id")
+  .action(async (sessionId: string) => {
+    const workspace = await requireWorkspace();
+    const session = await getSession(workspace, sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} was not found.`);
+    }
+    console.log(JSON.stringify({ session }, null, 2));
+  });
+
+sessionCommand
+  .command("events")
+  .description("List events for one durable session.")
+  .argument("<session-id>", "session id")
+  .option("--limit <number>", "maximum events to print", parsePositiveInteger, 500)
+  .action(async (sessionId: string, options: { limit: number }) => {
+    const workspace = await requireWorkspace();
+    const events = await listSessionEvents(workspace, sessionId, { limit: options.limit });
+    if (events.length === 0) {
+      console.log("No events.");
+      return;
+    }
+    for (const event of events) {
+      console.log(`${String(event.seq).padStart(4)}  ${event.timestamp}  ${event.type.padEnd(10)}  ${event.summary}`);
+    }
+  });
+
+sessionCommand
+  .command("record")
+  .description("Record one event into a durable session.")
+  .argument("<session-id>", "session id")
+  .requiredOption("--type <type>", "event type: prompt, assistant, tool, file_edit, checkpoint, note, error, other")
+  .option("--summary <summary>", "short event summary")
+  .option("--tool <tool>", "tool name")
+  .option("--input-json <json>", "JSON input payload")
+  .option("--output-json <json>", "JSON output payload")
+  .option("--error <message>", "error text")
+  .option("--file <path>", "file affected by this event; repeatable", collectOption, [])
+  .option("--operation <operation>", "operation for --file entries", "edit")
+  .option("--before-text <text>", "file content before the edit for rewind")
+  .option("--after-text <text>", "file content after the edit for rewind")
+  .action(async (sessionId: string, options: {
+    type: string;
+    summary?: string;
+    tool?: string;
+    inputJson?: string;
+    outputJson?: string;
+    error?: string;
+    file: string[];
+    operation: string;
+    beforeText?: string;
+    afterText?: string;
+  }) => {
+    const workspace = await requireWorkspace();
+    const event = await appendSessionEvent(workspace, {
+      sessionId,
+      type: parseSessionEventType(options.type),
+      summary: options.summary,
+      toolName: options.tool,
+      input: options.inputJson ? parseJsonLiteral(options.inputJson, "--input-json") : undefined,
+      output: options.outputJson ? parseJsonLiteral(options.outputJson, "--output-json") : undefined,
+      error: options.error,
+      files: options.file.map((filePath) => ({ path: filePath, operation: options.operation })),
+      snapshots: options.file.length > 0 && (options.beforeText !== undefined || options.afterText !== undefined)
+        ? options.file.map((filePath) => ({ path: filePath, beforeText: options.beforeText ?? null, afterText: options.afterText ?? null }))
+        : undefined
+    });
+    console.log(JSON.stringify(event, null, 2));
+  });
+
+sessionCommand
+  .command("checkpoint")
+  .description("Add a named checkpoint to a durable session.")
+  .argument("<session-id>", "session id")
+  .argument("<name>", "checkpoint name")
+  .option("--note <note>", "optional checkpoint note")
+  .action(async (sessionId: string, name: string, options: { note?: string }) => {
+    const workspace = await requireWorkspace();
+    const checkpoint = await addSessionCheckpoint(workspace, sessionId, name, options.note);
+    console.log(JSON.stringify(checkpoint, null, 2));
+  });
+
+sessionCommand
+  .command("replay")
+  .description("Print a read-only timeline for a durable session.")
+  .argument("<session-id>", "session id")
+  .action(async (sessionId: string) => {
+    const workspace = await requireWorkspace();
+    const timeline = await sessionTimeline(workspace, sessionId);
+    console.log(JSON.stringify({ session_id: sessionId, timeline }, null, 2));
+  });
+
+sessionCommand
+  .command("prune")
+  .description("Delete sessions older than retention policy.")
+  .option("--retention-days <days>", "override sessions.retention_days", parsePositiveInteger)
+  .action(async (options: { retentionDays?: number }) => {
+    const workspace = await requireWorkspace();
+    const deleted = await pruneSessions(workspace, options.retentionDays);
+    console.log(`Pruned ${deleted} session(s).`);
+  });
+
+const rewindCommand = program
+  .command("rewind")
+  .description("Preview or apply a session rewind from recorded file snapshots.")
+  .summary("Restore workspace files to their pre-session contents from captured snapshots.");
+
+rewindCommand
+  .command("preview")
+  .description("Preview the files that a session rewind would restore or delete.")
+  .argument("<session-id>", "session id")
+  .action(async (sessionId: string) => {
+    const workspace = await requireWorkspace();
+    console.log(JSON.stringify(await previewSessionRewind(workspace, sessionId), null, 2));
+  });
+
+rewindCommand
+  .command("apply")
+  .description("Apply a session rewind after exact confirmation.")
+  .argument("<session-id>", "session id")
+  .requiredOption("--confirm <token>", "exact confirmation token printed by rewind preview")
+  .action(async (sessionId: string, options: { confirm: string }) => {
+    const workspace = await requireWorkspace();
+    const result = await applySessionRewind(workspace, sessionId, options.confirm);
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+const graphCommand = program
+  .command("graph")
+  .description("Build and query deterministic graph knowledge.")
+  .summary("Extract files, headings, symbols, package dependencies, and memory nodes from indexed chunks.");
+
+graphCommand
+  .command("build")
+  .description("Rebuild graph knowledge from the current lexical index.")
+  .option("--max-chunks <number>", "maximum chunks to scan", parsePositiveInteger)
+  .action(async (options: { maxChunks?: number }) => {
+    const workspace = await requireWorkspace();
+    const result = await buildGraph(workspace, { maxChunks: options.maxChunks });
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+graphCommand
+  .command("query")
+  .description("Query graph nodes and their immediate relations.")
+  .argument("<query>", "node, symbol, heading, dependency, or memory term")
+  .option("--limit <number>", "maximum matching nodes", parsePositiveInteger, 20)
+  .action(async (query: string, options: { limit: number }) => {
+    const workspace = await requireWorkspace();
+    console.log(JSON.stringify(await queryGraph(workspace, query, { limit: options.limit }), null, 2));
+  });
+
+graphCommand
+  .command("stats")
+  .description("Show graph node and edge counts.")
+  .action(async () => {
+    const workspace = await requireWorkspace();
+    console.log(JSON.stringify(await graphStats(workspace), null, 2));
+  });
+
 program
   .command("doctor")
   .description("Diagnose environment and workspace health.")
@@ -720,7 +1212,18 @@ Examples:
       if (!workspace) {
         throw new Error("No kbx workspace found. Run kbx init first.");
       }
-      const repair = await refreshWorkspaceIndex(workspace);
+      const repairProgress = createIngestProgress();
+      let repair: Awaited<ReturnType<typeof refreshWorkspaceIndex>>;
+      try {
+        repair = await refreshWorkspaceIndex(workspace, {
+          onProgress: repairProgress?.onProgress
+        });
+      } catch (error) {
+        repairProgress?.error();
+        throw error;
+      } finally {
+        await repairProgress?.stop();
+      }
       console.log(`repair  refreshed ${repair.files} file(s), ${repair.chunks} new chunk(s), ${repair.skipped} skipped/unchanged, ${repair.deleted} deleted across ${repair.sources} source(s).`);
     }
     const lines = await runDoctor(workspace, {
@@ -895,7 +1398,17 @@ When indexed content exists, kbx rebuilds into a temporary index before swapping
     };
 
     if (options.reindex === true) {
-      await rebuildWorkspaceIndexForModel(workspace, nextManifest, sources);
+      const reindexProgress = createIngestProgress();
+      try {
+        await rebuildWorkspaceIndexForModel(workspace, nextManifest, sources, {
+          onProgress: reindexProgress?.onProgress
+        });
+      } catch (error) {
+        reindexProgress?.error();
+        throw error;
+      } finally {
+        await reindexProgress?.stop();
+      }
     } else {
       await saveManifest(workspace, nextManifest);
       await resetWorkspaceIndex(workspace);
@@ -952,90 +1465,74 @@ program.parseAsync().catch((error: unknown) => {
 interface CliIngestProgress {
   onProgress: (event: IngestProgressEvent) => void;
   error: () => void;
+  stop: () => Promise<void>;
 }
 
 function createIngestProgress(): CliIngestProgress | undefined {
-  if (process.stderr.isTTY !== true) {
+  const progress = createTerminalProgress();
+  if (!progress) {
     return undefined;
   }
 
-  let spin: SpinnerResult | null = null;
-  let bar: ProgressResult | null = null;
   let advancedFiles = 0;
-  let spinStarted = false;
-
-  const activeSpinner = () => {
-    spin ??= spinner({ output: process.stderr });
-    return spin;
-  };
-
-  const startOrUpdateSpinner = (message: string) => {
-    const current = activeSpinner();
-    if (spinStarted) {
-      current.message(message);
-      return;
-    }
-    current.start(message);
-    spinStarted = true;
-  };
 
   const onProgress = (event: IngestProgressEvent) => {
     switch (event.phase) {
       case "prepare": {
-        startOrUpdateSpinner(`Preparing ${shortPath(event.target)}...`);
+        progress.update({
+          phase: "prepare",
+          label: "Preparing workspace",
+          detail: shortPath(event.target)
+        });
         return;
       }
       case "scan-start": {
-        startOrUpdateSpinner(`Scanning ${event.source}...`);
+        progress.update({
+          phase: "scan",
+          label: "Scanning files",
+          detail: event.source
+        });
         return;
       }
       case "scan-complete": {
         if (event.totalFiles === 0) {
-          spin?.stop(`No indexable files found in ${event.source}.`);
-          spin = null;
-          spinStarted = false;
+          progress.finish(`No indexable files found in ${event.source}.`);
           return;
         }
 
-        spin?.stop(`Found ${event.totalFiles} indexable file(s).`);
-        spin = null;
-        spinStarted = false;
-        bar = progress({ max: event.totalFiles, output: process.stderr });
         advancedFiles = 0;
-        bar.start(`Indexing 0/${event.totalFiles} file(s)`);
+        progress.update({
+          phase: "index",
+          label: "Indexing files",
+          current: 0,
+          total: event.totalFiles,
+          detail: event.source
+        });
         return;
       }
       case "delete": {
-        bar?.message(`Cleaning deleted files (${event.deletedFiles})...`);
+        progress.update({
+          phase: "delete",
+          label: "Cleaning deleted files",
+          count: event.deletedFiles,
+          detail: event.source
+        });
         return;
       }
       case "file": {
-        if (!bar) {
-          return;
-        }
-        const step = event.processedFiles - advancedFiles;
         advancedFiles = event.processedFiles;
-        const message = ingestProgressMessage(event);
-        if (step > 0) {
-          bar.advance(step, message);
-        } else {
-          bar.message(message);
-        }
+        progress.update({
+          phase: "index",
+          label: "Indexing files",
+          current: event.processedFiles,
+          total: event.totalFiles,
+          detail: ingestProgressMessage(event)
+        });
         return;
       }
       case "complete": {
-        if (bar) {
-          const remaining = event.totalFiles - advancedFiles;
-          if (remaining > 0) {
-            bar.advance(remaining, ingestCompleteMessage(event));
-          }
-          bar.stop(ingestCompleteMessage(event));
-          bar = null;
-        } else {
-          spin?.stop(ingestCompleteMessage(event));
-          spin = null;
-          spinStarted = false;
-        }
+        advancedFiles = event.totalFiles;
+        progress.finish(ingestCompleteMessage(event));
         return;
       }
     }
@@ -1044,12 +1541,9 @@ function createIngestProgress(): CliIngestProgress | undefined {
   return {
     onProgress,
     error: () => {
-      bar?.error("Ingest failed.");
-      bar = null;
-      spin?.error("Ingest failed.");
-      spin = null;
-      spinStarted = false;
-    }
+      progress.error("Ingest failed.");
+    },
+    stop: () => progress.stop()
   };
 }
 
@@ -1208,6 +1702,19 @@ async function requireWorkspace() {
   return workspace;
 }
 
+async function vectorChunkCount(workspace: Awaited<ReturnType<typeof requireWorkspace>>, dim: number): Promise<number> {
+  try {
+    const store = await ChunkVectorStore.open(workspace, dim, { readOnly: true });
+    try {
+      return store.docCount;
+    } finally {
+      store.close();
+    }
+  } catch {
+    return 0;
+  }
+}
+
 async function confirmAction(message: string): Promise<boolean> {
   if (!process.stdin.isTTY) {
     throw new Error("Confirmation required. Re-run with --yes in non-interactive mode.");
@@ -1227,6 +1734,30 @@ function parsePositiveInteger(value: string): number {
     throw new Error("Expected a positive integer");
   }
   return parsed;
+}
+
+function parseSessionEventType(value: string): SessionEventType {
+  switch (value) {
+    case "prompt":
+    case "assistant":
+    case "tool":
+    case "file_edit":
+    case "checkpoint":
+    case "note":
+    case "error":
+    case "other":
+      return value;
+    default:
+      throw new Error("Expected event type prompt, assistant, tool, file_edit, checkpoint, note, error, or other");
+  }
+}
+
+function parseJsonLiteral(value: string, optionName: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch (error) {
+    throw new Error(`${optionName} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function collectOption(value: string, previous: string[]): string[] {

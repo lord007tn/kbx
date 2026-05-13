@@ -191,6 +191,26 @@ export class LexicalIndexStore {
     return row ? rowToChunk(row) : null;
   }
 
+  allChunks(limit = 10000): ChunkRecord[] {
+    const rows = this.db.prepare(`
+      SELECT
+        id,
+        content_id,
+        text,
+        source,
+        human_source,
+        citation_source,
+        source_origin,
+        chunk_idx,
+        mtime,
+        tags
+      FROM chunks
+      ORDER BY source, chunk_idx
+      LIMIT ?
+    `).all(Math.max(1, limit)) as ChunkRow[];
+    return rows.map(rowToChunk);
+  }
+
   aliasesForContent(contentId: string, branchScope: string | undefined, limit: number): SearchHit[] {
     const branchClause = branchScope === undefined
       ? ""
@@ -242,7 +262,6 @@ export class LexicalIndexStore {
         tags TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS chunks_source_idx ON chunks(source);
-      CREATE INDEX IF NOT EXISTS chunks_content_idx ON chunks(content_id);
       CREATE TABLE IF NOT EXISTS chunk_terms (
         term TEXT NOT NULL,
         chunk_id TEXT NOT NULL,
@@ -265,9 +284,9 @@ export class LexicalIndexStore {
         human_source,
         tokenize = 'trigram'
       );
-      PRAGMA user_version = ${LEXICAL_SCHEMA_VERSION};
     `);
     this.ensureContentIdColumn();
+    this.db.pragma(`user_version = ${LEXICAL_SCHEMA_VERSION}`);
   }
 
   private assertReadableSchema(): void {

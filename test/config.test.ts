@@ -36,6 +36,18 @@ test("config gates destructive MCP tools", () => {
   assert.throws(() => setConfigValue(defaultConfig, "mcp.destructive_tools", "yes"), /disabled or enabled/);
 });
 
+test("config controls session capture and graph knowledge", () => {
+  const captureConfig = setConfigValue(defaultConfig, "sessions.capture", "full");
+  const graphConfig = setConfigValue(captureConfig, "graph.enabled", "enabled");
+  const maxChunksConfig = setConfigValue(graphConfig, "graph.max_chunks", "42");
+
+  assert.equal(getConfigValue(maxChunksConfig, "sessions.capture"), "full");
+  assert.equal(getConfigValue(maxChunksConfig, "graph.enabled"), "enabled");
+  assert.equal(getConfigValue(maxChunksConfig, "graph.max_chunks"), 42);
+  assert.throws(() => setConfigValue(defaultConfig, "sessions.capture", "yes"), /disabled, metadata, or full/);
+  assert.throws(() => setConfigValue(defaultConfig, "sessions.max_event_bytes", "0"), /positive integer/);
+});
+
 test("user config stores init root preference", () => {
   const config = setUserConfigValue(defaultUserConfig, "init.root_preference", "git-root");
   assert.equal(getUserConfigValue(config, "init.root_preference"), "git-root");

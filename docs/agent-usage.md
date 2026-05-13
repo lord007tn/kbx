@@ -12,13 +12,27 @@ Use `kbx` when an agent needs local workspace context instead of asking the user
 
 1. Check index health with `kbx_index_status` if freshness is uncertain.
 2. Use `kbx_watch_status` during active editing sessions to inspect freshness and watcher guidance.
-3. Call `kbx_search` with `top_k=5` for focused questions.
-4. Use `top_k=10` for broad discovery or ambiguous terms.
-5. Treat `kbx_search` results as previews. Use `id`, `source`, `chunk_idx`, `score`, `match`, `preview`, and `freshness` to decide what matters.
-6. Call `kbx_get_chunk` for each result you plan to quote, cite, or rely on.
-7. Search again with exact names when needed: symbols, config keys, error strings, filenames, routes, and package names.
+3. Call `kbx_session_handoff` at session start or handoff when you need a compact workspace/index summary.
+4. Call `kbx_search` with `top_k=5` for focused questions.
+5. Use `top_k=10` for broad discovery or ambiguous terms.
+6. Treat `kbx_search` results as previews. Use `id`, `source`, `chunk_idx`, `score`, `match`, `preview`, and `freshness` to decide what matters.
+7. Call `kbx_get_chunk` for each result you plan to quote, cite, or rely on.
+8. Search again with exact names when needed: symbols, config keys, error strings, filenames, routes, and package names.
+9. Use `kbx_graph_query` when the task is about relationships between files, headings, symbols, dependencies, or retained memory.
 
 `kbx_search` performs bounded opportunistic freshness when the detected change count is small. Use `kbx_refresh_file` when the relevant path is known, or `kbx_refresh_index` when the workspace has many changes. For continuous freshness, run `kbx watch` in a separate terminal.
+
+## Memory Notes
+
+Use `kbx_memory_add` only for compact decisions, preferences, handoffs, and events the user would reasonably expect to persist. Every memory note requires `retention_days`; do not store full hidden transcripts or raw tool logs through this path.
+
+Use `kbx_memory_list` to inspect retained notes. Retained notes are stored under `.kbx/sessions`, indexed as `session-memory:*` sources, and retrieved through normal `kbx_search` calls.
+
+## Durable Sessions
+
+Durable session capture is opt-in. Use `sessions.capture=metadata` for tool/event summaries and `sessions.capture=full` only when the user wants local raw payload capture. The session event store is separate from the search index and lives under `.kbx/sessions.db`.
+
+Use `kbx_session_record_event` for explicit event capture, `kbx_session_checkpoint` for named progress markers, and `kbx_session_replay` for read-only timelines. Use `kbx_rewind_preview` before any rollback; `kbx_rewind_apply` is destructive and requires both `mcp.destructive_tools=enabled` and the exact preview token.
 
 ## Hook Support
 
@@ -33,4 +47,6 @@ By default MCP citations are safe workspace-relative paths or `external:` labels
 - Do not treat `kbx` as live web search.
 - Do not request full text for every search hit by default; fetch only the chunks that are actually needed.
 - Do not assume the index is fresh if `kbx_index_status` or `doctor --fresh` reports stale, deleted, or new files.
+- Do not enable full session capture unless the user explicitly wants local raw payload retention.
+- Do not apply a rewind unless the user has reviewed the preview and supplied or approved the exact confirmation token.
 - Do not call destructive tools unless the user explicitly requested the operation and supplied/approved the required confirmation token.

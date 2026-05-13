@@ -10,6 +10,7 @@ It stores workspace data under `.kbx/`, runs locally, and exposes retrieval thro
 
 ```bash
 npx -y kbx --help
+npx -y kbx setup --model minilm
 npx -y kbx init --model minilm
 npx -y kbx ingest
 npx -y kbx search "your query"
@@ -54,18 +55,27 @@ kbx init
 kbx init --choose-model
 kbx init --model minilm
 kbx init --git-root --model nomic
+kbx setup --model minilm --client codex
 kbx ingest
 kbx ingest docs --include "**/*.md" --exclude "drafts/**" --no-gitignore
 kbx ingest docs --watch
 kbx search "workspace registry"
+kbx context "workspace registry"
 kbx search "workspace registry" --fresh
 kbx search "workspace registry" --global
 kbx search "workspace registry" --reranker model
 kbx watch
+kbx status --fresh
 kbx doctor --repair
 kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
 kbx memory list
 kbx memory prune
+kbx config set sessions.capture full
+kbx session start --client codex --name "implementation session"
+kbx session replay <session-id>
+kbx graph build
+kbx graph query "startSession"
+kbx rewind preview <session-id>
 kbx stats --fresh
 kbx config set chunk.strategy sentence
 kbx config set init.root_preference git-root --global
@@ -144,6 +154,7 @@ printf '{"paths":["src/app.ts"]}' | kbx hook files refresh
 Tools exposed:
 
 - `kbx_search`
+- `kbx_context`
 - `kbx_search_global`
 - `kbx_search_many`
 - `kbx_list_sources`
@@ -151,12 +162,27 @@ Tools exposed:
 - `kbx_index_status`
 - `kbx_agent_guide`
 - `kbx_watch_status`
+- `kbx_session_handoff`
+- `kbx_session_list`
+- `kbx_session_show`
+- `kbx_session_events`
+- `kbx_session_record_event`
+- `kbx_session_checkpoint`
+- `kbx_session_replay`
+- `kbx_rewind_preview`
+- `kbx_graph_build`
+- `kbx_graph_query`
+- `kbx_graph_stats`
+- `kbx_memory_add`
+- `kbx_memory_list`
 - `kbx_refresh_index`
 - `kbx_refresh_file`
 - `kbx_mcp_config`
-- gated destructive tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, `kbx_delete_workspace_kb`
+- gated destructive tools: `kbx_remove_source`, `kbx_reset_index`, `kbx_forget_workspace`, `kbx_delete_workspace_kb`, `kbx_rewind_apply`
 
-`kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. It opportunistically refreshes changed indexed content when the change count is small, so the search tools are not advertised as read-only to MCP clients. Use `kbx_refresh_index` or `kbx watch` for larger updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes a `kbx_usage` prompt and `kbx://usage` resource with agent guidance.
+`kbx_context` returns a bounded, grouped markdown context bundle for task-level use. `kbx_search` returns previews, chunk IDs, source citations, scores, match type, and bounded freshness metadata. They opportunistically refresh changed indexed content when the change count is small, so the search tools are not advertised as read-only to MCP clients. Use `kbx_refresh_index` or `kbx watch` for larger updates. Use `kbx_get_chunk` to fetch full text for specific results. The MCP server also exposes initialization instructions, a `kbx_usage` prompt, and a `kbx://usage` resource with agent guidance.
+
+`kbx_session_handoff` returns a compact workspace/index summary for session start or handoff. Durable session capture is opt-in through `sessions.capture`; session events, checkpoints, and rewind snapshots are stored in `.kbx/sessions.db`. `kbx_memory_add` lets an agent save explicit compact decisions, preferences, or handoff notes with a required retention period; those notes are stored under `.kbx/sessions` and become searchable after indexing.
 
 Search uses deterministic hybrid retrieval by default. Optional model or LLM reranking can be layered in with an external command:
 
@@ -198,6 +224,7 @@ Implemented:
 
 - workspace init, registry list/forget/delete
 - ingest/search/stats/reset/doctor/config
+- guided `kbx setup`, readable `kbx status`, and grouped `kbx context`
 - global search across registered workspaces with `kbx search --global`
 - doctor repair flow with `kbx doctor --repair`
 - explicit search freshness with `kbx search --fresh`
@@ -205,6 +232,10 @@ Implemented:
 - source list/remove
 - external import snapshots
 - explicit retention-bound session memory source under `.kbx/sessions`
+- MCP retained memory tools and compact session handoff summaries
+- opt-in durable sessions with checkpoints, replay, and retention pruning
+- session rewind preview/apply from captured file snapshots
+- deterministic graph knowledge build/query/stats over indexed chunks
 - PDF and DOCX text extraction during ingest
 - ingest policy overrides with `--include`, `--exclude`, and `--no-gitignore`
 - root `.kbxignore` support in addition to `.gitignore`
@@ -219,7 +250,7 @@ Implemented:
 - init-time model selection with `--model`, `--choose-model`, git-root prompts, and user-level root preference
 - interactive model switch reindex prompt
 - stdio MCP server
-- expanded MCP read, maintenance, watch status, config, opportunistic freshness, and gated destructive tools
+- expanded MCP read, session, graph, maintenance, watch status, config, opportunistic freshness, and gated destructive tools
 - MCP adapter config validation through `doctor`
 - local agent guidance through `kbx agent guide`
 - Claude Code hook adapter for refreshing kbx after Write/Edit/MultiEdit

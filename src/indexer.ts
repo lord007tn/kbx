@@ -16,6 +16,42 @@ import path from "node:path";
 
 const EMBED_BATCH_SIZE = 64;
 const LEXICAL_REPAIR_BATCH_SIZE = 512;
+const WINDOWS_FS_RETRY_DELAYS_MS = [50, 100, 250, 500, 1000];
+
+async function renamePath(from: string, to: string): Promise<void> {
+  await retryWindowsFsOperation(() => rename(from, to));
+}
+
+async function removePath(target: string, options: { recursive?: boolean; force?: boolean } = {}): Promise<void> {
+  await retryWindowsFsOperation(() => rm(target, options));
+}
+
+async function retryWindowsFsOperation<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (
+        process.platform !== "win32"
+        || !isRetryableWindowsFsError(error)
+        || attempt >= WINDOWS_FS_RETRY_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+      await delay(WINDOWS_FS_RETRY_DELAYS_MS[attempt]!);
+    }
+  }
+}
+
+function isRetryableWindowsFsError(error: unknown): boolean {
+  return error instanceof Error
+    && "code" in error
+    && ["EBUSY", "EPERM", "ENOTEMPTY"].includes(String(error.code));
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export interface IngestResult {
   files: number;
@@ -83,17 +119,28 @@ async function ingestSourceAtomically(
   nextSources?: SourceEntry[]
 ): Promise<IngestResult> {
   const tempWorkspace = await prepareTemporaryIndexWorkspace(workspace);
+  let primaryError: unknown;
+  let result: IngestResult | undefined;
   try {
     if (nextSources) {
       await writeJson(tempWorkspace.sourcesPath, nextSources);
     }
-    const result = await ingestSourceDirect(tempWorkspace, source, options);
+    result = await ingestSourceDirect(tempWorkspace, source, options);
     await swapIngestedIndex(workspace, tempWorkspace, { includeSources: nextSources !== undefined });
     await touchManifest(workspace);
-    return result;
+  } catch (error) {
+    primaryError = error;
   } finally {
-    await rm(tempWorkspace.kbxDir, { recursive: true, force: true });
+    try {
+      await removePath(tempWorkspace.kbxDir, { recursive: true, force: true });
+    } catch (error) {
+      primaryError ??= error;
+    }
   }
+  if (primaryError) {
+    throw primaryError;
+  }
+  return result!;
 }
 
 async function ingestSourceDirect(workspace: Workspace, source: SourceEntry, options: IngestProgressOptions = {}): Promise<IngestResult> {
@@ -367,57 +414,57 @@ async function swapIngestedIndex(
 
   try {
     if (await exists(workspace.collectionDir)) {
-      await rename(workspace.collectionDir, backupCollectionDir);
+      await renamePath(workspace.collectionDir, backupCollectionDir);
       backedUpCollection = true;
     }
     if (await exists(workspace.lexicalPath)) {
-      await rename(workspace.lexicalPath, backupLexicalPath);
+      await renamePath(workspace.lexicalPath, backupLexicalPath);
       backedUpLexical = true;
     }
     if (await exists(workspace.statsPath)) {
-      await rename(workspace.statsPath, backupStatsPath);
+      await renamePath(workspace.statsPath, backupStatsPath);
       backedUpStats = true;
     }
     if (options.includeSources === true && await exists(workspace.sourcesPath)) {
-      await rename(workspace.sourcesPath, backupSourcesPath);
+      await renamePath(workspace.sourcesPath, backupSourcesPath);
       backedUpSources = true;
     }
 
-    await rename(tempWorkspace.collectionDir, workspace.collectionDir);
+    await renamePath(tempWorkspace.collectionDir, workspace.collectionDir);
     if (await exists(tempWorkspace.lexicalPath)) {
-      await rename(tempWorkspace.lexicalPath, workspace.lexicalPath);
+      await renamePath(tempWorkspace.lexicalPath, workspace.lexicalPath);
     } else {
-      await rm(workspace.lexicalPath, { force: true });
+      await removePath(workspace.lexicalPath, { force: true });
     }
-    await rename(tempWorkspace.statsPath, workspace.statsPath);
+    await renamePath(tempWorkspace.statsPath, workspace.statsPath);
     if (options.includeSources === true) {
-      await rename(tempWorkspace.sourcesPath, workspace.sourcesPath);
+      await renamePath(tempWorkspace.sourcesPath, workspace.sourcesPath);
     }
 
     await Promise.all([
-      rm(backupCollectionDir, { recursive: true, force: true }),
-      rm(backupLexicalPath, { force: true }),
-      rm(backupStatsPath, { force: true }),
-      rm(backupSourcesPath, { force: true })
+      removePath(backupCollectionDir, { recursive: true, force: true }),
+      removePath(backupLexicalPath, { force: true }),
+      removePath(backupStatsPath, { force: true }),
+      removePath(backupSourcesPath, { force: true })
     ]);
   } catch (error) {
     await Promise.all([
-      rm(workspace.collectionDir, { recursive: true, force: true }),
-      rm(workspace.lexicalPath, { force: true }),
-      rm(workspace.statsPath, { force: true }),
-      options.includeSources === true ? rm(workspace.sourcesPath, { force: true }) : Promise.resolve()
+      removePath(workspace.collectionDir, { recursive: true, force: true }),
+      removePath(workspace.lexicalPath, { force: true }),
+      removePath(workspace.statsPath, { force: true }),
+      options.includeSources === true ? removePath(workspace.sourcesPath, { force: true }) : Promise.resolve()
     ]);
     if (backedUpCollection) {
-      await rename(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
+      await renamePath(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
     }
     if (backedUpLexical) {
-      await rename(backupLexicalPath, workspace.lexicalPath).catch(() => undefined);
+      await renamePath(backupLexicalPath, workspace.lexicalPath).catch(() => undefined);
     }
     if (backedUpStats) {
-      await rename(backupStatsPath, workspace.statsPath).catch(() => undefined);
+      await renamePath(backupStatsPath, workspace.statsPath).catch(() => undefined);
     }
     if (backedUpSources) {
-      await rename(backupSourcesPath, workspace.sourcesPath).catch(() => undefined);
+      await renamePath(backupSourcesPath, workspace.sourcesPath).catch(() => undefined);
     }
     throw error;
   }
@@ -485,7 +532,7 @@ function indexedFileUnchanged(indexed: IndexedFileStats, file: Pick<SourceFileEn
   return indexed.mtime === file.mtime && indexed.size === file.size;
 }
 
-export async function refreshWorkspaceIndex(workspace: Workspace): Promise<RefreshResult> {
+export async function refreshWorkspaceIndex(workspace: Workspace, options: IngestProgressOptions = {}): Promise<RefreshResult> {
   const sources = await loadSources(workspace);
   let files = 0;
   let chunks = 0;
@@ -493,7 +540,7 @@ export async function refreshWorkspaceIndex(workspace: Workspace): Promise<Refre
   let deleted = 0;
 
   for (const source of sources) {
-    const result = await ingestSource(workspace, source);
+    const result = await ingestSource(workspace, source, options);
     files += result.files;
     chunks += result.chunks;
     skipped += result.skipped;
@@ -567,7 +614,7 @@ export async function scanWorkspaceFreshness(workspace: Workspace): Promise<Fres
 
 export async function refreshWorkspaceFreshness(
   workspace: Workspace,
-  options: { maxChanges?: number } = {}
+  options: { maxChanges?: number } & IngestProgressOptions = {}
 ): Promise<FreshnessRefreshResult> {
   const scan = await scanWorkspaceFreshness(workspace);
   const changes = scan.stale + scan.deleted + scan.newFiles;
@@ -586,7 +633,7 @@ export async function refreshWorkspaceFreshness(
     };
   }
 
-  const refresh = await refreshWorkspaceIndex(workspace);
+  const refresh = await refreshWorkspaceIndex(workspace, options);
   return {
     ...scan,
     refreshed: true,
@@ -594,7 +641,7 @@ export async function refreshWorkspaceFreshness(
   };
 }
 
-export async function refreshWorkspaceFile(workspace: Workspace, targetPath: string): Promise<RefreshResult> {
+export async function refreshWorkspaceFile(workspace: Workspace, targetPath: string, options: IngestProgressOptions = {}): Promise<RefreshResult> {
   const absoluteTarget = path.resolve(workspace.root, targetPath);
   const relativePath = path.relative(workspace.root, absoluteTarget).replaceAll("\\", "/");
   if (!isWorkspaceRelativePath(relativePath)) {
@@ -607,14 +654,14 @@ export async function refreshWorkspaceFile(workspace: Workspace, targetPath: str
     .sort((a, b) => b.path.length - a.path.length);
 
   if (coveringSources.length > 0) {
-    const result = await ingestSource(workspace, coveringSources[0]!);
+    const result = await ingestSource(workspace, coveringSources[0]!, options);
     return {
       sources: 1,
       ...result
     };
   }
 
-  const result = await ingestWorkspaceTarget(workspace, absoluteTarget);
+  const result = await ingestWorkspaceTarget(workspace, absoluteTarget, options);
   return {
     sources: 1,
     ...result
@@ -652,10 +699,14 @@ function deleteSourceAlias(store: ChunkVectorStore, lexical: LexicalIndexStore, 
   store.deleteSource(source);
   lexical.deleteSource(source);
   for (const contentId of contentIds) {
-    if (!lexical.hasContent(contentId)) {
+    if (isSharedContentId(contentId) && !lexical.hasContent(contentId)) {
       store.deleteContent(contentId);
     }
   }
+}
+
+function isSharedContentId(id: string): boolean {
+  return /^c[0-9a-f]{23}$/.test(id);
 }
 
 export async function loadIndexStats(workspace: Workspace, model: string, dim: number): Promise<IndexStats> {
@@ -696,7 +747,8 @@ export async function resetWorkspaceIndex(workspace: Workspace): Promise<void> {
 export async function rebuildWorkspaceIndexForModel(
   workspace: Workspace,
   nextManifest: WorkspaceManifest,
-  sources: SourceEntry[]
+  sources: SourceEntry[],
+  options: IngestProgressOptions = {}
 ): Promise<void> {
   const suffix = `${process.pid}-${Date.now()}`;
   const tempDir = path.join(workspace.kbxDir, `.reindex-${suffix}`);
@@ -716,6 +768,7 @@ export async function rebuildWorkspaceIndexForModel(
   await writeJson(tempWorkspace.configPath, await loadConfig(workspace));
   await writeJson(tempWorkspace.sourcesPath, sources);
 
+  let primaryError: unknown;
   try {
     if (sources.length === 0) {
       const store = await ChunkVectorStore.open(tempWorkspace, nextManifest.dim);
@@ -723,13 +776,22 @@ export async function rebuildWorkspaceIndexForModel(
       await writeJson(tempWorkspace.statsPath, emptyStats(nextManifest));
     } else {
       for (const source of sources) {
-        await ingestSourceDirect(tempWorkspace, source);
+        await ingestSourceDirect(tempWorkspace, source, options);
       }
     }
 
     await swapRebuiltIndex(workspace, tempWorkspace, nextManifest);
+  } catch (error) {
+    primaryError = error;
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    try {
+      await removePath(tempDir, { recursive: true, force: true });
+    } catch (error) {
+      primaryError ??= error;
+    }
+  }
+  if (primaryError) {
+    throw primaryError;
   }
 }
 
@@ -822,46 +884,46 @@ async function swapRebuiltIndex(workspace: Workspace, tempWorkspace: Workspace, 
 
   try {
     if (await exists(workspace.collectionDir)) {
-      await rename(workspace.collectionDir, backupCollectionDir);
+      await renamePath(workspace.collectionDir, backupCollectionDir);
       backedUpCollection = true;
     }
     if (await exists(workspace.statsPath)) {
-      await rename(workspace.statsPath, backupStatsPath);
+      await renamePath(workspace.statsPath, backupStatsPath);
       backedUpStats = true;
     }
     if (await exists(workspace.lexicalPath)) {
-      await rename(workspace.lexicalPath, backupLexicalPath);
+      await renamePath(workspace.lexicalPath, backupLexicalPath);
       backedUpLexical = true;
     }
 
-    await rename(tempWorkspace.collectionDir, workspace.collectionDir);
+    await renamePath(tempWorkspace.collectionDir, workspace.collectionDir);
     if (await exists(tempWorkspace.lexicalPath)) {
-      await rename(tempWorkspace.lexicalPath, workspace.lexicalPath);
+      await renamePath(tempWorkspace.lexicalPath, workspace.lexicalPath);
     } else {
-      await rm(workspace.lexicalPath, { force: true });
+      await removePath(workspace.lexicalPath, { force: true });
     }
-    await rename(tempWorkspace.statsPath, workspace.statsPath);
+    await renamePath(tempWorkspace.statsPath, workspace.statsPath);
     await saveManifest(workspace, nextManifest);
 
     await Promise.all([
-      rm(backupCollectionDir, { recursive: true, force: true }),
-      rm(backupLexicalPath, { force: true }),
-      rm(backupStatsPath, { force: true })
+      removePath(backupCollectionDir, { recursive: true, force: true }),
+      removePath(backupLexicalPath, { force: true }),
+      removePath(backupStatsPath, { force: true })
     ]);
   } catch (error) {
     await Promise.all([
-      rm(workspace.collectionDir, { recursive: true, force: true }),
-      rm(workspace.lexicalPath, { force: true }),
-      rm(workspace.statsPath, { force: true })
+      removePath(workspace.collectionDir, { recursive: true, force: true }),
+      removePath(workspace.lexicalPath, { force: true }),
+      removePath(workspace.statsPath, { force: true })
     ]);
     if (backedUpCollection) {
-      await rename(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
+      await renamePath(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
     }
     if (backedUpStats) {
-      await rename(backupStatsPath, workspace.statsPath).catch(() => undefined);
+      await renamePath(backupStatsPath, workspace.statsPath).catch(() => undefined);
     }
     if (backedUpLexical) {
-      await rename(backupLexicalPath, workspace.lexicalPath).catch(() => undefined);
+      await renamePath(backupLexicalPath, workspace.lexicalPath).catch(() => undefined);
     }
     await saveManifest(workspace, oldManifest).catch(() => undefined);
     throw error;

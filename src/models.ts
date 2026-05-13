@@ -37,6 +37,19 @@ type TransformersModule = typeof import("@huggingface/transformers");
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
+    id: "hash",
+    model: "hash",
+    dim: 384,
+    size: "0 MB",
+    profile: "fast",
+    accuracy: "good",
+    speed: "fastest",
+    memory: "low",
+    languages: "Token-based",
+    bestFor: "Very fast local indexing for large code workspaces",
+    description: "Deterministic local hash embeddings with no model download"
+  },
+  {
     id: "minilm",
     model: "Xenova/all-MiniLM-L6-v2",
     dim: 384,
@@ -147,6 +160,9 @@ export function formatBenchmarkSpeed(result: ModelBenchmarkResult | undefined, f
 }
 
 export async function isCatalogModelInstalled(model: ModelCatalogEntry): Promise<boolean> {
+  if (model.model === "hash") {
+    return true;
+  }
   const cacheDir = await transformersCacheDir();
   if (!cacheDir) {
     return false;

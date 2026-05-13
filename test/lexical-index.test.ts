@@ -73,6 +73,26 @@ test("LexicalIndexStore deletes all chunks for a source", async () => {
   }
 });
 
+test("LexicalIndexStore lists chunks for derived stores", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-all-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const store = await LexicalIndexStore.open(workspace);
+    store.upsertChunks([
+      chunk({ id: "b", source: "b.md", text: "second" }),
+      chunk({ id: "a", source: "a.md", text: "first" })
+    ]);
+
+    const chunks = store.allChunks(10);
+
+    assert.deepEqual(chunks.map((record) => record.id), ["a", "b"]);
+    await store.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("LexicalIndexStore tracks content aliases separately from chunk aliases", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-lexical-content-alias-"));
   try {

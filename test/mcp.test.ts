@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -39,19 +39,34 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
 
   assert.deepEqual([...server.tools.keys()].sort(), [
     "kbx_agent_guide",
+    "kbx_context",
     "kbx_delete_workspace_kb",
     "kbx_forget_workspace",
     "kbx_get_chunk",
+    "kbx_graph_build",
+    "kbx_graph_query",
+    "kbx_graph_stats",
     "kbx_index_status",
     "kbx_list_sources",
+    "kbx_memory_add",
+    "kbx_memory_list",
     "kbx_mcp_config",
     "kbx_refresh_file",
     "kbx_refresh_index",
     "kbx_remove_source",
+    "kbx_rewind_apply",
+    "kbx_rewind_preview",
     "kbx_reset_index",
     "kbx_search",
     "kbx_search_global",
     "kbx_search_many",
+    "kbx_session_checkpoint",
+    "kbx_session_events",
+    "kbx_session_handoff",
+    "kbx_session_list",
+    "kbx_session_record_event",
+    "kbx_session_replay",
+    "kbx_session_show",
     "kbx_watch_status"
   ].sort());
   assert.equal(server.toolConfigs.get("kbx_search")?.annotations?.readOnlyHint, false);
@@ -93,6 +108,7 @@ test("kbx mcp stdio supports search and reports validation errors", async () => 
     });
 
     assert.equal(tools.tools.some((tool) => tool.name === "kbx_search"), true);
+    assert.match(client.getInstructions() ?? "", /kbx_context/);
     assert.equal(body.results[0]?.source, "alpha.md");
     assert.equal(blankResponse.isError, true);
     assert.match(toolText(blankResponse), /Input validation error|too_small/);
@@ -279,6 +295,159 @@ test("kbx_agent_guide explains freshness and destructive gates", async () => {
   }
 });
 
+test("kbx_context returns grouped task context", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-context-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const response = await callTool(server, "kbx_context", {
+      query: "alpha token",
+      top_k: 1,
+      max_chars: 4000
+    });
+    const text = response.content[0]!.text;
+
+    assert.match(text, /# kbx context/);
+    assert.match(text, /## alpha\.md/);
+    assert.match(text, /alpha token/);
+    assert.match(text, /Freshness:/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_memory_add saves explicit retained notes for later search", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-memory-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const addResponse = await callTool(server, "kbx_memory_add", {
+      title: "MCP retained decision",
+      text: "Decision: retain explicit MCP memory notes with a retention policy.",
+      retention_days: 14
+    });
+    const addBody = JSON.parse(addResponse.content[0]!.text) as {
+      memory: { id: string; title: string; expires_at: string };
+      indexed: { chunks: number };
+    };
+    const listResponse = await callTool(server, "kbx_memory_list", {});
+    const listBody = JSON.parse(listResponse.content[0]!.text) as {
+      retention_days: number;
+      entries: Array<{ id: string; title: string }>;
+    };
+    const searchResponse = await callTool(server, "kbx_search", {
+      query: "explicit MCP memory retention policy",
+      top_k: 3
+    });
+    const searchBody = JSON.parse(searchResponse.content[0]!.text) as {
+      results: Array<{ source: string; preview: string }>;
+    };
+
+    assert.equal(addBody.memory.title, "MCP retained decision");
+    assert.ok(addBody.indexed.chunks > 0);
+    assert.equal(listBody.retention_days, 14);
+    assert.equal(listBody.entries.some((entry) => entry.id === addBody.memory.id), true);
+    assert.equal(searchBody.results.some((hit) => hit.source.startsWith("session-memory:")), true);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_session_handoff summarizes workspace state without hidden transcripts", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-handoff-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+    await callTool(server, "kbx_memory_add", {
+      title: "Handoff note",
+      text: "Handoff: the next agent should search before editing unfamiliar code.",
+      retention_days: 7
+    });
+
+    const response = await callTool(server, "kbx_session_handoff", {
+      source_limit: 1,
+      memory_limit: 2
+    });
+    const body = JSON.parse(response.content[0]!.text) as {
+      workspace: { id: string; name: string };
+      index: { files: number; chunks: number; freshness: { stale: number; deleted: number; newFiles: number } };
+      recent_sources: Array<{ source: string }>;
+      session_memories: Array<{ title: string }>;
+      next: string[];
+    };
+
+    assert.equal(body.workspace.id, "test-workspace");
+    assert.equal(body.workspace.name, "test");
+    assert.ok(body.index.files >= 2);
+    assert.ok(body.index.chunks >= 2);
+    assert.equal(body.index.freshness.stale, 0);
+    assert.equal(body.recent_sources.length, 1);
+    assert.equal(body.session_memories.some((entry) => entry.title === "Handoff note"), true);
+    assert.match(body.next.join(" "), /kbx_memory_add/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx session MCP tools record, list, and replay events", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-session-tools-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const recordResponse = await callTool(server, "kbx_session_record_event", {
+      session_id: "session-tools",
+      type: "note",
+      summary: "Reviewed durable sessions"
+    });
+    const checkpointResponse = await callTool(server, "kbx_session_checkpoint", {
+      session_id: "session-tools",
+      name: "ready"
+    });
+    const listResponse = await callTool(server, "kbx_session_list", {});
+    const eventsResponse = await callTool(server, "kbx_session_events", { session_id: "session-tools" });
+    const replayResponse = await callTool(server, "kbx_session_replay", { session_id: "session-tools" });
+    const recordBody = JSON.parse(recordResponse.content[0]!.text) as { captured: boolean; event: { summary: string } };
+    const checkpointBody = JSON.parse(checkpointResponse.content[0]!.text) as { checkpoint: { name: string } };
+    const listBody = JSON.parse(listResponse.content[0]!.text) as { sessions: Array<{ id: string }> };
+    const eventsBody = JSON.parse(eventsResponse.content[0]!.text) as { events: Array<{ summary: string }> };
+    const replayBody = JSON.parse(replayResponse.content[0]!.text) as { timeline: unknown[] };
+
+    assert.equal(recordBody.captured, true);
+    assert.equal(recordBody.event.summary, "Reviewed durable sessions");
+    assert.equal(checkpointBody.checkpoint.name, "ready");
+    assert.equal(listBody.sessions.some((session) => session.id === "session-tools"), true);
+    assert.equal(eventsBody.events.length, 2);
+    assert.ok(replayBody.timeline.length >= 2);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx graph MCP tools build and query graph knowledge", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-graph-tools-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const buildResponse = await callTool(server, "kbx_graph_build", {});
+    const queryResponse = await callTool(server, "kbx_graph_query", { query: "Alpha" });
+    const statsResponse = await callTool(server, "kbx_graph_stats", {});
+    const buildBody = JSON.parse(buildResponse.content[0]!.text) as { chunks_scanned: number; nodes: number };
+    const queryBody = JSON.parse(queryResponse.content[0]!.text) as { nodes: Array<{ label: string; edges: unknown[] }> };
+    const statsBody = JSON.parse(statsResponse.content[0]!.text) as { nodes: number };
+
+    assert.ok(buildBody.chunks_scanned >= 2);
+    assert.ok(buildBody.nodes >= 2);
+    assert.equal(queryBody.nodes.some((node) => /Alpha|alpha\.md/.test(node.label)), true);
+    assert.equal(statsBody.nodes, buildBody.nodes);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("destructive MCP tools require config gate and confirmation token", async () => {
   const fixture = await createIndexedWorkspace("kbx-mcp-gate-");
   try {
@@ -300,6 +469,23 @@ test("destructive MCP tools require config gate and confirmation token", async (
     const invalid = await callTool(server, "kbx_reset_index", { confirm: "yes" });
     assert.equal(invalid.isError, true);
     assert.match(invalid.content[0]!.text, /invalid_confirmation/);
+
+    await writeFile(path.join(fixture.root, "rewind.md"), "after\n", "utf8");
+    await callTool(server, "kbx_session_record_event", {
+      session_id: "rewind-session",
+      type: "file_edit",
+      summary: "changed rewind file",
+      files: [{ path: "rewind.md", operation: "edit" }],
+      snapshots: [{ path: "rewind.md", before_text: "before\n", after_text: "after\n" }]
+    });
+    const previewResponse = await callTool(server, "kbx_rewind_preview", { session_id: "rewind-session" });
+    const previewBody = JSON.parse(previewResponse.content[0]!.text) as { confirmation: string };
+    const rewindResponse = await callTool(server, "kbx_rewind_apply", {
+      session_id: "rewind-session",
+      confirm: previewBody.confirmation
+    });
+    assert.equal(rewindResponse.isError, false);
+    assert.equal(await readFile(path.join(fixture.root, "rewind.md"), "utf8"), "before\n");
 
     const reset = await callTool(server, "kbx_reset_index", { confirm: `reset-index:${fixture.manifest.workspace_id}` });
     assert.equal(reset.isError, false);

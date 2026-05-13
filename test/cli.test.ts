@@ -27,9 +27,19 @@ test("CLI initializes, ingests, searches, reports stats, and runs doctor", async
     assert.match(search.stdout, /1\. notes\.md#0/);
     assert.match(search.stdout, /Retrieval citations stay local/);
 
+    const context = await runCli(fixture, ["context", "retrieval citations", "-k", "1"]);
+    assert.match(context.stdout, /# kbx context/);
+    assert.match(context.stdout, /## notes\.md/);
+    assert.match(context.stdout, /Retrieval citations stay local/);
+
     const invalidReranker = await runCliExpectFailure(fixture, ["search", "retrieval citations", "--reranker", "bogus"]);
     assert.equal(invalidReranker.code, 1);
     assert.match(invalidReranker.stderr, /Unknown reranker mode "bogus"/);
+
+    const status = await runCli(fixture, ["status", "--fresh"]);
+    assert.match(status.stdout, /kbx status/);
+    assert.match(status.stdout, /Documents:\s+1/);
+    assert.match(status.stdout, /Stale:\s+0/);
 
     const stats = await runCli(fixture, ["stats", "--fresh"]);
     assert.match(stats.stdout, /Documents: 1/);
@@ -40,6 +50,24 @@ test("CLI initializes, ingests, searches, reports stats, and runs doctor", async
     assert.match(doctor.stdout, /ok  workspace:/);
     assert.match(doctor.stdout, /ok  lexical:/);
     assert.match(doctor.stdout, /ok  freshness: 0 stale, 0 deleted, 0 new/);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("CLI setup initializes, ingests, and prints MCP config", async () => {
+  const fixture = await createFixture("kbx-cli-setup-");
+  try {
+    await writeFile(path.join(fixture.workspace, "setup.md"), "# Setup\n\nsetup command token\n", "utf8");
+
+    const setup = await runCli(fixture, ["setup", "--here", "--model", "minilm", "--client", "codex"]);
+    assert.match(setup.stdout, /Workspace:/);
+    assert.match(setup.stdout, /Model: minilm \(384d\)/);
+    assert.match(setup.stdout, /Ingest: indexed 1 file\(s\), 1 new chunk\(s\)/);
+    assert.match(setup.stdout, /\[mcp_servers\.kbx\]/);
+
+    const context = await runCli(fixture, ["context", "setup command token", "-k", "1"]);
+    assert.match(context.stdout, /setup command token/);
   } finally {
     await cleanupFixture(fixture);
   }

@@ -501,14 +501,17 @@ readTools = [
   "kbx_get_chunk",
   "kbx_list_sources",
   "kbx_index_status",
-  "kbx_agent_guide"
+  "kbx_agent_guide",
+  "kbx_memory_list",
+  "kbx_session_handoff"
 ]
 
 maintenanceTools = [
   "kbx_refresh_index",
   "kbx_refresh_file",
   "kbx_watch_status",
-  "kbx_mcp_config"
+  "kbx_mcp_config",
+  "kbx_memory_add"
 ]
 
 destructiveTools = [
@@ -526,6 +529,8 @@ Read tools are enabled by default. Maintenance tools are enabled by default only
 3. Clear error responses when the gate or token is missing.
 
 MCP search should return chunk IDs, source citations, match layer, scores, snippets, and next-step guidance. Full chunk text should be fetched through `kbx_get_chunk` unless the caller explicitly requests included text.
+
+`kbx_memory_add` is a non-destructive maintenance/write tool for explicit compact memory notes only. It requires a retention period, writes under `.kbx/sessions`, and indexes the note as a normal session-memory source. It is not full hidden transcript capture. `kbx_session_handoff` is read-only and returns workspace/index state, recent indexed sources, freshness, and retained memory note metadata for handoff without replaying raw session events.
 
 ### 7.16 Platform adapters and agent hooks
 
@@ -605,7 +610,8 @@ Initial adapter coverage targets Claude Desktop, Claude Code, Codex, Cursor, Gem
 - Platform adapter validation in `doctor`.
 - Expanded `kbx mcp config` coverage and client-specific guidance.
 - Destructive MCP tools behind config gate and confirmation tokens.
-- Optional session memory source with explicit retention policy. **Implemented for CLI-managed compact notes.**
+- Optional session memory source with explicit retention policy. **Implemented for CLI and MCP-managed compact notes.**
+- Compact `kbx_session_handoff` for workspace/index summaries. **Implemented.**
 - Initial hook adapter spike for one stable host. **Implemented for Claude Code file-edit freshness refresh.**
 
 ### v0.6 — Polish
