@@ -1,6 +1,6 @@
 # Release Process
 
-This project publishes the `kbx` CLI to npm and creates GitHub Releases from Conventional Commits with [antfu/changelogithub](https://github.com/antfu/changelogithub).
+This project publishes the `kbx` CLI as the npm package `@lord007tn/kbx` and creates GitHub Releases from Conventional Commits with [antfu/changelogithub](https://github.com/antfu/changelogithub).
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ That command uses the pinned `antfu/changelogithub` npm package from `package-lo
 
 ## npm Token Setup
 
-1. Create an npm token that can publish `kbx`.
+1. Create an npm token that can publish `@lord007tn/kbx`.
 2. In GitHub, open the repository settings.
 3. Go to **Secrets and variables** -> **Actions**.
 4. Add a repository secret named `NPM_TOKEN`.
