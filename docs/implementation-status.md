@@ -1,6 +1,6 @@
 # kbx Implementation Status
 
-Last reviewed: May 12, 2026
+Last reviewed: May 17, 2026
 
 This document records what is already present in the current `kbx` codebase so the PRD can distinguish shipped foundation from planned expansion.
 
@@ -14,7 +14,7 @@ This document records what is already present in the current `kbx` codebase so t
 - PDF, DOCX, PPTX, XLSX, and EPUB text extraction during ingest.
 - Image ingest for PNG/JPEG/WebP/GIF/TIFF/BMP extensions, with PNG text metadata extraction and optional OCR through `tesseract` or `KBX_OCR_COMMAND`.
 - External import snapshots with `--allow-external`, stored under `.kbx/imports/`.
-- Optional compact session memory source with explicit per-entry retention, stored under `.kbx/sessions/`.
+- Optional compact session memory source with explicit per-entry retention, typed metadata, supporting files/tags/chunk IDs, supersession links, latest/superseded state, deterministic retention scores, citation verification, and supersession history, stored under `.kbx/sessions/`.
 - Optional dev reports for kbx-assisted Codex runs, stored under `.kbx/debug/reports/`.
 - Opt-in durable session event store under `.kbx/sessions.db` with metadata/full capture modes, retention pruning, redaction, checkpoints, and read-only replay.
 - Session rewind preview/apply from captured file snapshots with exact confirmation tokens.
@@ -24,23 +24,25 @@ This document records what is already present in the current `kbx` codebase so t
 - Transformers.js embedding pipeline with a deterministic hash embedder for tests.
 - Embedding model catalog with install status, benchmark cache, offline model loading, and model switch reindex flow.
 - Persistent SQLite lexical index stored under `.kbx/lexical.db` with FTS5 unicode and trigram indexes.
-- Hybrid baseline search that combines vector results with SQLite lexical/BM25 matches.
+- Hybrid baseline search that combines vector results with SQLite lexical/BM25 matches, with opt-in graph-expanded candidates after graph build.
 - Deterministic retrieval enhancers: exact phrase/source boosts, proximity scoring, post-fusion reranking, and query-centered snippets.
 - Optional Transformers.js model reranker and external command reranker contract for heavier model-based or LLM reranking experiments; disabled by default.
 - Built-in local reranker mode for deterministic phrase, source, proximity, and match-type ordering.
 - Retrieval quality eval command with MRR, hit rate, and recall@k over a JSON corpus.
 - Example retrieval eval corpus under `examples/retrieval-eval/`.
 - Global search across registered workspaces via `kbx search --global`.
+- Structured CLI search output via `kbx search --json` for chunk IDs, previews, and citations.
+- Active search and file-focused context omit superseded retained notes by default, with explicit history flags for audit workflows.
 - Workspace stats, freshness reporting, explicit search freshness, reset, doctor checks, lexical/vector consistency checks, and benchmark options.
 - Doctor repair flow via `kbx doctor --repair`.
 - Watch ingest mode using current workspace/source boundaries via `kbx ingest --watch`, `kbx watch`, and one detached auto watcher enabled by `watch.auto`.
 - Root `.kbxignore` support in addition to `.gitignore`.
 - Git branch-scoped workspace indexing with current-branch search filtering and vector storage dedupe for identical chunk content.
-- Session memory commands: `kbx memory add`, `kbx memory list`, and `kbx memory prune`.
+- Session memory commands: `kbx memory add`, `kbx memory list`, `kbx memory verify`, `kbx memory history`, and `kbx memory prune`.
 - Durable session commands: `kbx session start`, `record`, `checkpoint`, `replay`, `events`, `end`, and `prune`.
 - Rewind commands: `kbx rewind preview` and `kbx rewind apply`.
 - Graph commands: `kbx graph build`, `kbx graph query`, and `kbx graph stats`.
-- Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, `kbx_agent_guide`, `kbx_memory_list`, `kbx_session_handoff`, `kbx_session_list`, `kbx_session_show`, `kbx_session_events`, `kbx_session_replay`, `kbx_rewind_preview`, `kbx_graph_query`, and `kbx_graph_stats`.
+- Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, `kbx_file_context`, `kbx_inspect`, `kbx_agent_guide`, `kbx_memory_list`, `kbx_memory_verify`, `kbx_memory_history`, `kbx_session_handoff`, `kbx_session_list`, `kbx_session_show`, `kbx_session_events`, `kbx_session_replay`, `kbx_rewind_preview`, `kbx_graph_query`, and `kbx_graph_stats`. `kbx_search` supports compact results plus ID-based expansion.
 - MCP retained-memory write tool: `kbx_memory_add`, which saves explicit compact notes with required retention and indexes them as session-memory sources.
 - MCP durable-session write tools: `kbx_session_record_event` and `kbx_session_checkpoint`.
 - MCP graph rebuild tool: `kbx_graph_build`.

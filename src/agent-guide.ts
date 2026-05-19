@@ -12,14 +12,19 @@ Recommended workflow:
 7. kbx_search and kbx_context perform a bounded freshness refresh when the detected change count is small. If freshness is skipped or clearly stale, call kbx_refresh_file for a known file or kbx_refresh_index for a broader refresh.
 8. Start with top_k=5. Use top_k=10 only for broad discovery or ambiguous terms.
 9. Treat kbx_search results as previews. Read the id, source, chunk_idx, score, match, preview, and freshness fields.
-10. Call kbx_get_chunk for the specific ids you intend to rely on or quote.
-11. Use kbx_graph_query for relationships between files, headings, symbols, dependencies, or retained memory.
-12. Search again with exact symbols, config keys, error strings, filenames, or acronyms when the first query is too broad.
-13. Prefer citing source and chunk_idx in your response. If source is "external:..." treat it as imported local context, not a repository path.
+10. Call kbx_search with expand_ids when you need several full chunks from previous compact results, or kbx_get_chunk for one specific id.
+11. Use kbx_file_context when the user is editing or reviewing specific files and you need indexed file context plus linked retained memories.
+12. Use kbx_inspect for a read-only local summary of sources, freshness, retained-memory counts, and graph availability.
+13. Use kbx_graph_query for relationships between files, headings, symbols, dependencies, or retained memory. Use kbx_search with use_graph=true only when graph-expanded candidates are useful for the task.
+14. Search again with exact symbols, config keys, error strings, filenames, or acronyms when the first query is too broad.
+15. Prefer citing source and chunk_idx in your response. If source is "external:..." treat it as imported local context, not a repository path.
 
 Memory workflow:
-- Use kbx_memory_add only for compact decisions, preferences, handoffs, or events worth retaining. Always set an explicit retention_days value.
-- Use kbx_memory_list to inspect retained notes. Retained notes are indexed as session-memory sources and are searchable like other chunks.
+- Use kbx_memory_add only for compact decisions, preferences, architecture notes, bug lessons, workflows, handoffs, facts, or events worth retaining. Always set an explicit retention_days value.
+- Include type, files, tags, source_chunk_ids, and supersedes when known; kbx uses this metadata for deterministic retention scoring and future retrieval.
+- When supersedes is provided, the older retained note is marked as no longer latest instead of being deleted.
+- Active search and file context omit superseded retained notes by default; request superseded notes only when auditing history.
+- Use kbx_memory_list to inspect retained notes, kbx_memory_verify to check whether a note's source_chunk_ids still resolve to indexed context, and kbx_memory_history to inspect supersession chains. Retained notes are indexed as session-memory sources and are searchable like other chunks.
 - Do not store full hidden transcripts in kbx_memory_add.
 
 Dev report workflow:

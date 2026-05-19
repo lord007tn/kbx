@@ -134,7 +134,7 @@ export interface SearchHit {
   score: number;
   text: string;
   snippet?: string;
-  match: "vector" | "lexical" | "hybrid";
+  match: "vector" | "lexical" | "graph" | "hybrid";
   branch_scope?: string;
   branch_name?: string;
   git_head?: string;

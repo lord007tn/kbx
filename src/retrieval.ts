@@ -72,7 +72,7 @@ export function rerankSearchHits(query: string, hits: SearchHit[]): SearchHit[] 
         source: hit.source,
         text: hit.text
       });
-      const matchBoost = hit.match === "hybrid" ? 0.08 : hit.match === "lexical" ? 0.04 : 0;
+      const matchBoost = hit.match === "hybrid" ? 0.08 : hit.match === "lexical" ? 0.04 : hit.match === "graph" ? 0.03 : 0;
       const rankTieBreaker = 1 / (1000 + index);
       return {
         ...withSnippet(hit, query),

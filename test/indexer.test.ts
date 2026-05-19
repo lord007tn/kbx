@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, removeSource, resetWorkspaceIndex, scanWorkspaceFreshness, type IngestProgressEvent } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { LexicalIndexStore } from "../src/lexical-index";
 import { SCHEMA_VERSION, type SourceEntry, type WorkspaceManifest } from "../src/types";
 import { ChunkVectorStore } from "../src/vector-store";
 import { defaultConfig, loadManifest, loadSources, workspaceFromRoot } from "../src/workspace";
+
+const exec = promisify(execFile);
 
 test("rebuildWorkspaceIndexForModel swaps in a rebuilt index after success", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-rebuild-success-"));
@@ -401,6 +405,68 @@ test("scanWorkspaceFreshness and refreshWorkspaceFreshness track indexed file ch
   }
 });
 
+test("refreshWorkspaceFreshness clears legacy unscoped entries after branch-scoped ingest", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-branch-legacy-refresh-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const notePath = path.join(root, "note.md");
+    await writeFile(notePath, "# Note\n\nlegacy branch migration token\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("old-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+
+    await ingestSource(workspace, source);
+    assert.equal((await loadIndexStats(workspace, "old-model", 3)).files["note.md"]?.chunks, 1);
+
+    await git(root, ["init", "-b", "main"]);
+    await git(root, ["config", "user.email", "kbx@example.test"]);
+    await git(root, ["config", "user.name", "kbx tests"]);
+    await git(root, ["add", "note.md"]);
+    await git(root, ["commit", "-m", "initial"]);
+    const mixedStats = await loadIndexStats(workspace, "old-model", 3);
+    mixedStats.branches = {
+      "branch:main": {
+        name: "main",
+        git_head: "test-head",
+        last_ingest_at: mixedStats.last_ingest_at
+      }
+    };
+    mixedStats.files["git:branch%3Amain:note.md"] = {
+      ...mixedStats.files["note.md"]!,
+      relative_path: "note.md",
+      branch_scope: "branch:main",
+      branch_name: "main",
+      git_head: "test-head"
+    };
+    await writeJson(workspace.statsPath, mixedStats);
+
+    const staleScan = await scanWorkspaceFreshness(workspace);
+    assert.equal(staleScan.deleted, 1);
+
+    const refreshed = await refreshWorkspaceFreshness(workspace, { maxChanges: 1 });
+    assert.equal(refreshed.refreshed, true);
+    assert.equal(refreshed.refresh?.deleted, 1);
+
+    const finalStats = await loadIndexStats(workspace, "old-model", 3);
+    assert.equal(finalStats.files["note.md"], undefined);
+    assert.equal(finalStats.files["git:branch%3Amain:note.md"]?.relative_path, "note.md");
+
+    const finalScan = await scanWorkspaceFreshness(workspace);
+    assert.deepEqual({ stale: finalScan.stale, deleted: finalScan.deleted, newFiles: finalScan.newFiles }, {
+      stale: 0,
+      deleted: 0,
+      newFiles: 0
+    });
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("scanWorkspaceFreshness detects size changes when mtime is preserved", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-freshness-size-"));
   const previousEmbedder = process.env.KBX_EMBEDDER;
@@ -481,4 +547,11 @@ function restoreEnv(name: string, value: string | undefined): void {
 
 async function waitForMtimeTick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+async function git(cwd: string, args: string[]): Promise<void> {
+  await exec("git", ["-C", cwd, ...args], {
+    windowsHide: true,
+    maxBuffer: 1024 * 1024
+  });
 }

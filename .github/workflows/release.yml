@@ -100,9 +100,11 @@ jobs:
         run: npm run smoke:install
 
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Create GitHub release
-        run: npx -y changelogithub@14.0.0
+      - name: Create GitHub release with antfu/changelogithub
+        run: npm run release:github -- --to "${GITHUB_REF_NAME}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

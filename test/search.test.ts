@@ -5,10 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import Database from "better-sqlite3";
+import { buildGraph } from "../src/graph-store";
 import { ingestSource } from "../src/indexer";
 import { writeJson } from "../src/io";
 import { LexicalIndexStore } from "../src/lexical-index";
 import { searchRegisteredWorkspaces, searchWorkspace } from "../src/search";
+import { addSessionMemory } from "../src/session-memory";
 import { SCHEMA_VERSION, type RegistryEntry, type SourceEntry, type WorkspaceManifest } from "../src/types";
 import { ChunkVectorStore } from "../src/vector-store";
 import { defaultConfig, workspaceFromRoot } from "../src/workspace";
@@ -219,6 +222,48 @@ test("searchRegisteredWorkspaces searches every registered workspace", async () 
   }
 });
 
+test("searchWorkspace can include graph-expanded candidates when enabled", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-search-graph-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeFile(path.join(root, "alpha.md"), "# Alpha\n\nordinary workspace text\n", "utf8");
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    const source: SourceEntry = { path: ".", kind: "workspace", include: [], exclude: [] };
+    await writeJson(workspace.sourcesPath, [source]);
+    await ingestSource(workspace, source);
+    await buildGraph(workspace);
+
+    const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+    const chunk = lexical.allChunks(1)[0]!;
+    await lexical.close();
+    const db = new Database(workspace.graphPath);
+    try {
+      db.prepare(`
+        INSERT INTO graph_nodes (id, type, label, aliases, source, first_seen_chunk_id)
+        VALUES (?, 'memory', ?, '', ?, ?)
+      `).run("node-latent-concept", "latent graph only concept", "alpha.md", chunk.id);
+    } finally {
+      db.close();
+    }
+
+    const hits = await searchWorkspace(workspace, "latent graph only concept", 1, {
+      graph: {
+        enabled: true
+      }
+    });
+
+    assert.equal(hits[0]?.source, "alpha.md");
+    assert.ok(hits[0]?.match === "graph" || hits[0]?.match === "hybrid");
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("searchWorkspace scopes indexed workspace content to the checked out Git branch", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-branch-search-"));
   const previousEmbedder = process.env.KBX_EMBEDDER;
@@ -252,12 +297,24 @@ test("searchWorkspace scopes indexed workspace content to the checked out Git br
     assert.equal(featureHits[0]?.branch_name, "feature");
     assert.equal(featureMainHits.some((hit) => hit.text.includes("main branch unique token")), false);
 
+    const { source: memorySource } = await addSessionMemory(workspace, {
+      title: "Branch shared memory",
+      text: "Decision: retained memory branch shared token should be available across branches.",
+      type: "decision",
+      retentionDays: 30
+    });
+    await ingestSource(workspace, memorySource);
+    const featureMemoryHits = await searchWorkspace(workspace, "retained memory branch shared token", 3);
+    assert.equal(featureMemoryHits.some((hit) => hit.source.startsWith("session-memory:")), true);
+
     await git(root, ["checkout", "main"]);
     const mainHits = await searchWorkspace(workspace, "main branch unique token", 3);
     const mainFeatureHits = await searchWorkspace(workspace, "feature branch unique token", 3);
+    const mainMemoryHits = await searchWorkspace(workspace, "retained memory branch shared token", 3);
     assert.equal(mainHits[0]?.source, "note.md");
     assert.equal(mainHits[0]?.branch_name, "main");
     assert.equal(mainFeatureHits.some((hit) => hit.text.includes("feature branch unique token")), false);
+    assert.equal(mainMemoryHits.some((hit) => hit.source.startsWith("session-memory:")), true);
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });

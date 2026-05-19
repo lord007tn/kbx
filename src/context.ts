@@ -6,7 +6,7 @@ export interface WorkspaceContextHit {
   source: string;
   chunk_idx: number;
   score: number;
-  match: "vector" | "lexical" | "hybrid";
+  match: "vector" | "lexical" | "graph" | "hybrid";
   text: string;
   branch?: string;
 }

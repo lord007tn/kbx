@@ -19,6 +19,9 @@
     "url": "https://github.com/lord007tn/kbx/issues"
   },
   "homepage": "https://github.com/lord007tn/kbx#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "kbx": "dist/cli.mjs"
@@ -35,6 +38,7 @@
   "scripts": {
     "build": "tsdown",
     "bench:projects": "node --import tsx scripts/benchmark-projects.ts",
+    "release:github": "changelogithub",
     "release:preflight": "npm run typecheck && npm test && npm run build && npm run smoke:pack && npm run smoke:install",
     "smoke:install": "node scripts/smoke-install.mjs",
     "smoke:pack": "node scripts/verify-npm-pack.mjs",
@@ -60,10 +64,14 @@
     "pdf-parse": "^2.4.5",
     "zod": "^4.4.1"
   },
+  "overrides": {
+    "@babel/helper-string-parser": "8.0.0-rc.4",
+    "c12": "^3.3.2"
+  },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
-    "esbuild": "^0.28.0",
+    "changelogithub": "^14.0.0",
     "hyparquet": "^1.25.6",
     "hyparquet-compressors": "^1.1.1",
     "tsdown": "^0.21.10",

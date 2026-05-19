@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { chunkId } from "../src/chunk";
 
 const exec = promisify(execFile);
 const cliPath = path.resolve("src", "cli.ts");
@@ -26,6 +27,12 @@ test("CLI initializes, ingests, searches, reports stats, and runs doctor", async
     const search = await runCli(fixture, ["search", "retrieval citations", "-k", "3"]);
     assert.match(search.stdout, /1\. notes\.md#0/);
     assert.match(search.stdout, /Retrieval citations stay local/);
+
+    const searchJson = await runCli(fixture, ["search", "retrieval citations", "-k", "1", "--json"]);
+    const searchBody = JSON.parse(searchJson.stdout) as { results: Array<{ id: string; source: string; preview: string }> };
+    assert.equal(searchBody.results[0]?.source, "notes.md");
+    assert.match(searchBody.results[0]?.preview ?? "", /Retrieval citations stay local/);
+    assert.ok(searchBody.results[0]?.id);
 
     const context = await runCli(fixture, ["context", "retrieval citations", "-k", "1"]);
     assert.match(context.stdout, /# kbx context/);
@@ -210,6 +217,68 @@ test("CLI dev report is opt-in and writes local debug reports", async () => {
 
     const listed = await runCli(fixture, ["dev", "report", "list"]);
     assert.match(listed.stdout, /saved report/);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("CLI file-context and inspect expose read-only memory surfaces", async () => {
+  const fixture = await createFixture("kbx-cli-inspect-");
+  try {
+    await writeFile(path.join(fixture.workspace, "notes.md"), "# Notes\n\nfile context token for inspection.\n", "utf8");
+    await runCli(fixture, ["init", "--here", "--model", "minilm"]);
+    await runCli(fixture, ["ingest"]);
+    const added = await runCli(fixture, [
+      "memory", "add",
+      "Bug lesson: notes.md has file context coverage.",
+      "--title", "Notes lesson",
+      "--type", "bug",
+      "--file", "notes.md",
+      "--source-chunk-id", chunkId("notes.md", 0),
+      "--retention-days", "30"
+    ]);
+    const memoryId = /Added session memory (\S+)/.exec(added.stdout)?.[1];
+    assert.ok(memoryId);
+
+    const fileContext = await runCli(fixture, ["file-context", "notes.md", "--term", "inspection", "--json"]);
+    const fileBody = JSON.parse(fileContext.stdout) as {
+      linked_memories: Array<{ title: string; type: string }>;
+      search_results: Array<{ source: string }>;
+    };
+    assert.equal(fileBody.linked_memories.some((memory) => memory.title === "Notes lesson" && memory.type === "bug"), true);
+    assert.equal(fileBody.search_results.some((hit) => hit.source === "notes.md"), true);
+
+    const inspect = await runCli(fixture, ["inspect", "--json"]);
+    const inspectBody = JSON.parse(inspect.stdout) as {
+      index: { files: number; chunks: number };
+      memories: { total: number; by_type: Record<string, number> };
+    };
+    assert.ok(inspectBody.index.files >= 1);
+    assert.ok(inspectBody.index.chunks >= 1);
+    assert.equal(inspectBody.memories.by_type.bug, 1);
+
+    const verify = await runCli(fixture, ["memory", "verify", memoryId.slice(0, 8), "--json"]);
+    const verifyBody = JSON.parse(verify.stdout) as {
+      status: string;
+      citations: Array<{ source: string; preview: string }>;
+    };
+    assert.equal(verifyBody.status, "verified");
+    assert.equal(verifyBody.citations[0]?.source, "notes.md");
+    assert.match(verifyBody.citations[0]?.preview ?? "", /file context token/);
+
+    const history = await runCli(fixture, ["memory", "history", memoryId.slice(0, 8), "--json"]);
+    const historyBody = JSON.parse(history.stdout) as {
+      summary: { chain_length: number; latest: number };
+      chain: Array<{ id: string; title: string }>;
+    };
+    assert.equal(historyBody.summary.chain_length, 1);
+    assert.equal(historyBody.summary.latest, 1);
+    assert.equal(historyBody.chain[0]?.title, "Notes lesson");
+
+    await runCli(fixture, ["graph", "build"]);
+    const graphQuery = await runCli(fixture, ["graph", "query", "notes", "--json"]);
+    const graphBody = JSON.parse(graphQuery.stdout) as { nodes: Array<{ label: string }> };
+    assert.equal(graphBody.nodes.some((node) => node.label.includes("notes.md")), true);
   } finally {
     await cleanupFixture(fixture);
   }

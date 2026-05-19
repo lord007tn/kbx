@@ -43,15 +43,19 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
     "kbx_delete_workspace_kb",
     "kbx_dev_report_add",
     "kbx_dev_report_list",
+    "kbx_file_context",
     "kbx_forget_workspace",
     "kbx_get_chunk",
     "kbx_graph_build",
     "kbx_graph_query",
     "kbx_graph_stats",
     "kbx_index_status",
+    "kbx_inspect",
     "kbx_list_sources",
     "kbx_memory_add",
+    "kbx_memory_history",
     "kbx_memory_list",
+    "kbx_memory_verify",
     "kbx_mcp_config",
     "kbx_refresh_file",
     "kbx_refresh_index",
@@ -157,6 +161,36 @@ test("kbx_get_chunk fetches the alias id returned by search", async () => {
 
     assert.equal(body.chunk.source, "alpha.md");
     assert.match(body.chunk.text, /alpha token/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_search expands returned IDs without requiring a new query", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-expand-search-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+
+    const searchResponse = await callTool(server, "kbx_search", {
+      query: "alpha token",
+      top_k: 1
+    });
+    const searchBody = JSON.parse(searchResponse.content[0]!.text) as { mode: string; results: Array<{ id: string }> };
+    const expandResponse = await callTool(server, "kbx_search", {
+      expand_ids: [searchBody.results[0]!.id]
+    });
+    const expandBody = JSON.parse(expandResponse.content[0]!.text) as {
+      mode: string;
+      results: Array<{ source: string; text: string }>;
+      missing_ids: string[];
+    };
+
+    assert.equal(searchBody.mode, "compact");
+    assert.equal(expandBody.mode, "expanded");
+    assert.equal(expandBody.results[0]?.source, "alpha.md");
+    assert.match(expandBody.results[0]?.text ?? "", /alpha token/);
+    assert.deepEqual(expandBody.missing_ids, []);
   } finally {
     await fixture.cleanup();
   }
@@ -372,10 +406,14 @@ test("kbx_memory_add saves explicit retained notes for later search", async () =
     const addResponse = await callTool(server, "kbx_memory_add", {
       title: "MCP retained decision",
       text: "Decision: retain explicit MCP memory notes with a retention policy.",
+      type: "decision",
+      files: ["src/mcp.ts"],
+      tags: ["mcp", "memory"],
+      source_chunk_ids: ["chunk_support"],
       retention_days: 14
     });
     const addBody = JSON.parse(addResponse.content[0]!.text) as {
-      memory: { id: string; title: string; expires_at: string };
+      memory: { id: string; title: string; type: string; files: string[]; tags: string[]; source_chunk_ids: string[]; retention: { tier: string; score: number }; expires_at: string };
       indexed: { chunks: number };
     };
     const listResponse = await callTool(server, "kbx_memory_list", {});
@@ -392,10 +430,178 @@ test("kbx_memory_add saves explicit retained notes for later search", async () =
     };
 
     assert.equal(addBody.memory.title, "MCP retained decision");
+    assert.equal(addBody.memory.type, "decision");
+    assert.deepEqual(addBody.memory.files, ["src/mcp.ts"]);
+    assert.deepEqual(addBody.memory.tags, ["mcp", "memory"]);
+    assert.deepEqual(addBody.memory.source_chunk_ids, ["chunk_support"]);
+    assert.equal(addBody.memory.retention.tier, "hot");
     assert.ok(addBody.indexed.chunks > 0);
     assert.equal(listBody.retention_days, 14);
     assert.equal(listBody.entries.some((entry) => entry.id === addBody.memory.id), true);
     assert.equal(searchBody.results.some((hit) => hit.source.startsWith("session-memory:")), true);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_memory_verify checks retained note source chunk citations", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-memory-verify-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+    const searchResponse = await callTool(server, "kbx_search", {
+      query: "alpha token",
+      top_k: 1
+    });
+    const searchBody = JSON.parse(searchResponse.content[0]!.text) as { results: Array<{ id: string }> };
+    const supportId = searchBody.results[0]!.id;
+    const addResponse = await callTool(server, "kbx_memory_add", {
+      title: "Verified memory",
+      text: "Decision: alpha token support should remain traceable.",
+      type: "decision",
+      source_chunk_ids: [supportId],
+      retention_days: 14
+    });
+    const addBody = JSON.parse(addResponse.content[0]!.text) as { memory: { id: string } };
+
+    const verifyResponse = await callTool(server, "kbx_memory_verify", {
+      id: addBody.memory.id.slice(0, 8)
+    });
+    const verifyBody = JSON.parse(verifyResponse.content[0]!.text) as {
+      status: string;
+      citations: Array<{ id: string; source: string; preview: string }>;
+      missing_source_chunk_ids: string[];
+    };
+
+    assert.equal(verifyBody.status, "verified");
+    assert.equal(verifyBody.citations[0]?.id, supportId);
+    assert.equal(verifyBody.citations[0]?.source, "alpha.md");
+    assert.match(verifyBody.citations[0]?.preview ?? "", /alpha token/);
+    assert.deepEqual(verifyBody.missing_source_chunk_ids, []);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_memory_history returns retained note supersession chain", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-memory-history-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+    const firstResponse = await callTool(server, "kbx_memory_add", {
+      title: "Old memory",
+      text: "Decision: old memory history token.",
+      type: "decision",
+      retention_days: 30
+    });
+    const firstBody = JSON.parse(firstResponse.content[0]!.text) as { memory: { id: string } };
+    const secondResponse = await callTool(server, "kbx_memory_add", {
+      title: "New memory",
+      text: "Decision: new memory history token.",
+      type: "decision",
+      supersedes: [firstBody.memory.id],
+      retention_days: 30
+    });
+    const secondBody = JSON.parse(secondResponse.content[0]!.text) as { memory: { id: string } };
+
+    const historyResponse = await callTool(server, "kbx_memory_history", {
+      id: secondBody.memory.id.slice(0, 8)
+    });
+    const historyBody = JSON.parse(historyResponse.content[0]!.text) as {
+      summary: { chain_length: number; ancestors: number; descendants: number; latest: number; superseded: number };
+      chain: Array<{ id: string; title: string; is_latest: boolean; superseded_by?: string }>;
+      latest: Array<{ id: string }>;
+    };
+
+    assert.equal(historyBody.summary.chain_length, 2);
+    assert.equal(historyBody.summary.ancestors, 1);
+    assert.equal(historyBody.summary.descendants, 0);
+    assert.equal(historyBody.summary.latest, 1);
+    assert.equal(historyBody.summary.superseded, 1);
+    assert.deepEqual(historyBody.chain.map((entry) => entry.title), ["Old memory", "New memory"]);
+    assert.equal(historyBody.chain[0]?.superseded_by, secondBody.memory.id);
+    assert.equal(historyBody.latest[0]?.id, secondBody.memory.id);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_file_context returns search hits and retained memories linked to files", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-file-context-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+    const oldResponse = await callTool(server, "kbx_memory_add", {
+      title: "Old file lesson",
+      text: "Bug lesson: alpha file used to need old review handling.",
+      type: "bug",
+      files: ["alpha.md"],
+      retention_days: 30
+    });
+    const oldBody = JSON.parse(oldResponse.content[0]!.text) as { memory: { id: string } };
+    await callTool(server, "kbx_memory_add", {
+      title: "File lesson",
+      text: "Bug lesson: alpha file needs careful review before edits.",
+      type: "bug",
+      files: ["alpha.md"],
+      supersedes: [oldBody.memory.id],
+      retention_days: 30
+    });
+
+    const response = await callTool(server, "kbx_file_context", {
+      files: ["alpha.md"],
+      terms: ["review"],
+      top_k: 3
+    });
+    const body = JSON.parse(response.content[0]!.text) as {
+      linked_memories: Array<{ title: string; type: string; files: string[] }>;
+      search_results: Array<{ source: string; preview: string }>;
+    };
+
+    assert.equal(body.linked_memories.some((memory) => memory.title === "File lesson" && memory.type === "bug"), true);
+    assert.equal(body.linked_memories.some((memory) => memory.title === "Old file lesson"), false);
+    assert.equal(body.search_results.some((hit) => hit.source === "alpha.md"), true);
+
+    const historyResponse = await callTool(server, "kbx_file_context", {
+      files: ["alpha.md"],
+      include_superseded_memories: true
+    });
+    const historyBody = JSON.parse(historyResponse.content[0]!.text) as {
+      linked_memories: Array<{ title: string }>;
+    };
+    assert.equal(historyBody.linked_memories.some((memory) => memory.title === "Old file lesson"), true);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("kbx_inspect returns read-only workspace and memory summary", async () => {
+  const fixture = await createIndexedWorkspace("kbx-mcp-inspect-");
+  try {
+    const server = new FakeMcpServer();
+    registerMcpTools(server as unknown as McpServer, fixture.workspace);
+    await callTool(server, "kbx_memory_add", {
+      title: "Inspect memory",
+      text: "Decision: inspection should show retained memory counts.",
+      type: "decision",
+      retention_days: 14
+    });
+
+    const response = await callTool(server, "kbx_inspect", {
+      source_limit: 2,
+      memory_limit: 2
+    });
+    const body = JSON.parse(response.content[0]!.text) as {
+      workspace: { id: string };
+      index: { files: number; chunks: number };
+      memories: { total: number; latest: number; by_type: Record<string, number> };
+    };
+
+    assert.equal(body.workspace.id, fixture.manifest.workspace_id);
+    assert.ok(body.index.files >= 2);
+    assert.ok(body.index.chunks >= 2);
+    assert.ok(body.memories.total >= 1);
+    assert.equal(body.memories.by_type.decision, 1);
   } finally {
     await fixture.cleanup();
   }

@@ -24,13 +24,23 @@ test("addSessionMemory records a retention-bound source and indexes searchable n
     const { entry, source } = await addSessionMemory(workspace, {
       title: "SQLite decision",
       text: "Decision: keep SQLite FTS5 as the lexical baseline for v0.4.",
+      type: "decision",
+      files: ["src/search.ts"],
+      tags: ["retrieval", "sqlite"],
+      sourceChunkIds: ["chunk_123"],
       retentionDays: 7
     });
     await ingestSource(workspace, source);
 
     const sources = await loadSources(workspace);
     assert.equal(sessionMemorySource(sources)?.retention_days, 7);
-    assert.equal((await listSessionMemories(workspace))[0]?.id, entry.id);
+    const listed = (await listSessionMemories(workspace))[0];
+    assert.equal(listed?.id, entry.id);
+    assert.equal(listed?.type, "decision");
+    assert.deepEqual(listed?.files, ["src/search.ts"]);
+    assert.deepEqual(listed?.tags, ["retrieval", "sqlite"]);
+    assert.deepEqual(listed?.source_chunk_ids, ["chunk_123"]);
+    assert.equal(listed?.retention.tier, "hot");
 
     const hits = await searchWorkspace(workspace, "SQLite lexical baseline", 3);
     assert.equal(hits[0]?.source.startsWith("session-memory:"), true);
@@ -66,6 +76,52 @@ test("pruneExpiredSessionMemories deletes expired notes and refresh removes inde
     const stats = await loadIndexStats(workspace, "test-model", 3);
     assert.equal(hits.some((hit) => hit.text.includes("temporary prune token")), false);
     assert.equal(Object.keys(stats.files).some((file) => file.startsWith(".kbx/sessions/")), false);
+  } finally {
+    restoreEnv("KBX_EMBEDDER", previousEmbedder);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("addSessionMemory marks superseded notes as no longer latest", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-memory-supersede-"));
+  const previousEmbedder = process.env.KBX_EMBEDDER;
+  process.env.KBX_EMBEDDER = "hash";
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    await writeJson(workspace.manifestPath, manifest("test-model", 3));
+    await writeJson(workspace.configPath, defaultConfig);
+    await writeJson(workspace.sourcesPath, []);
+
+    const first = await addSessionMemory(workspace, {
+      title: "Old decision",
+      text: "Decision: use the old retrieval setting with old-only-token.",
+      type: "decision",
+      retentionDays: 30
+    });
+    const second = await addSessionMemory(workspace, {
+      title: "New decision",
+      text: "Decision: use the new retrieval setting with new-only-token.",
+      type: "decision",
+      supersedes: [first.entry.id],
+      retentionDays: 30
+    });
+    await ingestSource(workspace, second.source);
+    const entries = await listSessionMemories(workspace);
+    const oldEntry = entries.find((entry) => entry.id === first.entry.id);
+    const newEntry = entries.find((entry) => entry.id === second.entry.id);
+
+    assert.equal(oldEntry?.is_latest, false);
+    assert.equal(oldEntry?.superseded_by, second.entry.id);
+    assert.equal(newEntry?.is_latest, true);
+    assert.deepEqual(newEntry?.supersedes, [first.entry.id]);
+
+    const currentHits = await searchWorkspace(workspace, "old-only-token", 5);
+    const historyHits = await searchWorkspace(workspace, "old-only-token", 5, {
+      includeSupersededMemories: true
+    });
+    assert.equal(currentHits.some((hit) => hit.source === `session-memory:${first.entry.id}`), false);
+    assert.equal(historyHits.some((hit) => hit.source === `session-memory:${first.entry.id}`), true);
   } finally {
     restoreEnv("KBX_EMBEDDER", previousEmbedder);
     await rm(root, { recursive: true, force: true });

@@ -16,17 +16,21 @@ Use `kbx` when an agent needs local workspace context instead of asking the user
 4. Call `kbx_search` with `top_k=5` for focused questions.
 5. Use `top_k=10` for broad discovery or ambiguous terms.
 6. Treat `kbx_search` results as previews. Use `id`, `source`, `chunk_idx`, `score`, `match`, `preview`, and `freshness` to decide what matters.
-7. Call `kbx_get_chunk` for each result you plan to quote, cite, or rely on.
-8. Search again with exact names when needed: symbols, config keys, error strings, filenames, routes, and package names.
-9. Use `kbx_graph_query` when the task is about relationships between files, headings, symbols, dependencies, or retained memory.
+7. Call `kbx_search` with `expand_ids` when you need several full chunks, or `kbx_get_chunk` for one result you plan to quote, cite, or rely on.
+8. Use `kbx_file_context` when editing or reviewing specific files and you need linked retained notes.
+9. Use `kbx_inspect` for a read-only local summary of sources, freshness, retained memory, and graph state.
+10. Search again with exact names when needed: symbols, config keys, error strings, filenames, routes, and package names.
+11. Use `kbx_graph_query` when the task is about relationships between files, headings, symbols, dependencies, or retained memory.
 
 `kbx_search` performs bounded opportunistic freshness when the detected change count is small. Use `kbx_refresh_file` when the relevant path is known, or `kbx_refresh_index` when the workspace has many changes. For continuous freshness, run `kbx watch` in a separate terminal or enable one background watcher with `kbx config set watch.auto enabled`.
 
 ## Memory Notes
 
-Use `kbx_memory_add` only for compact decisions, preferences, handoffs, and events the user would reasonably expect to persist. Every memory note requires `retention_days`; do not store full hidden transcripts or raw tool logs through this path.
+Use `kbx_memory_add` only for compact decisions, preferences, architecture notes, bug lessons, workflows, handoffs, facts, and events the user would reasonably expect to persist. Every memory note requires `retention_days`; do not store full hidden transcripts or raw tool logs through this path.
 
-Use `kbx_memory_list` to inspect retained notes. Retained notes are stored under `.kbx/sessions`, indexed as `session-memory:*` sources, and retrieved through normal `kbx_search` calls.
+Include `type`, `files`, `tags`, `source_chunk_ids`, and `supersedes` when known. Active search and file context omit superseded notes by default; request superseded notes only when auditing history.
+
+Use `kbx_memory_list` to inspect retained notes, `kbx_memory_verify` to check supporting chunk citations, and `kbx_memory_history` to inspect supersession chains. Retained notes are stored under `.kbx/sessions`, indexed as `session-memory:*` sources, and retrieved through normal `kbx_search` calls.
 
 ## Dev Reports
 

@@ -11,6 +11,7 @@ import { addDevReport, listDevReports } from "./dev-report";
 import { benchmarkLine, freshnessLine, runDoctor } from "./doctor";
 import { directorySizeBytes, formatBytes } from "./io";
 import { ingestSource, ingestWorkspaceTarget, loadIndexStats, rebuildWorkspaceIndexForModel, refreshWorkspaceFreshness, refreshWorkspaceIndex, removeSource, resetWorkspaceIndex, resolveSourceEntry, scanWorkspaceFreshness, type IngestProgressEvent, type IngestResult } from "./indexer";
+import { buildFileContext, buildMemoryHistory, buildMemoryVerification, buildWorkspaceInspection } from "./inspection";
 import { runMcpServer } from "./mcp";
 import { cachedModelBenchmark, formatBenchmarkSpeed, isCatalogModelInstalled, loadCatalogModelFromPath, MODEL_CATALOG, modelDetails, resolveModel, type ModelCatalogEntry } from "./models";
 import { searchRegisteredWorkspaces, searchWorkspace } from "./search";
@@ -245,6 +246,9 @@ program
   .option("-k, --top-k <number>", "number of chunks to return", parsePositiveInteger, 5)
   .option("--fresh", "refresh changed, deleted, or new source files before searching")
   .option("--global", "search across all registered workspaces")
+  .option("--graph", "include graph-expanded candidates when a graph has been built")
+  .option("--json", "output structured JSON with chunk IDs")
+  .option("--include-superseded-memories", "include retained notes that have been superseded")
   .option("--reranker <mode>", "optional reranker mode: none, local, model, or command", "none")
   .option("--reranker-model <model>", "Transformers.js feature-extraction model for --reranker model")
   .option("--reranker-command <command>", "external reranker command that reads JSON from stdin and writes scores JSON")
@@ -255,21 +259,41 @@ Examples:
   $ kbx search "workspace registry" -k 10
   $ kbx search "new ADR" --fresh
   $ kbx search "session timeout" --global
+  $ kbx search "supporting decision" --json
   $ kbx search "auth timeout" --reranker model
   $ kbx search "auth timeout" --reranker command --reranker-command "node rerank.mjs"
 
 Search reads the existing index by default. Use --fresh to refresh sources before querying.
 Model or LLM reranking is optional and off by default.
 `)
-  .action(async (query: string, options: { topK: number; fresh?: boolean; global?: boolean; reranker: "none" | "local" | "model" | "command"; rerankerModel?: string; rerankerCommand?: string }) => {
+  .action(async (query: string, options: { topK: number; fresh?: boolean; global?: boolean; graph?: boolean; json?: boolean; includeSupersededMemories?: boolean; reranker: "none" | "local" | "model" | "command"; rerankerModel?: string; rerankerCommand?: string }) => {
     if (options.global === true) {
       const hits = await searchRegisteredWorkspaces(query, options.topK, {
+        includeSupersededMemories: options.includeSupersededMemories === true,
         reranker: {
           mode: options.reranker,
           model: options.rerankerModel,
           command: options.rerankerCommand
         }
       });
+      if (options.json === true) {
+        console.log(JSON.stringify({
+          query,
+          global: true,
+          results: hits.map((hit) => ({
+            id: hit.id,
+            workspace: hit.workspace,
+            local_source: hit.local_source,
+            source: hit.source,
+            citation_source: hit.citation_source,
+            chunk_idx: hit.chunk_idx,
+            score: hit.score,
+            match: hit.match,
+            preview: excerpt(hit.snippet ?? hit.text)
+          }))
+        }, null, 2));
+        return;
+      }
       if (hits.length === 0) {
         console.log("No results.");
         return;
@@ -308,12 +332,32 @@ Model or LLM reranking is optional and off by default.
     }
 
     const hits = await searchWorkspace(workspace, query, options.topK, {
+      includeSupersededMemories: options.includeSupersededMemories === true,
+      graph: {
+        enabled: options.graph === true
+      },
       reranker: {
         mode: options.reranker,
         model: options.rerankerModel,
         command: options.rerankerCommand
       }
     });
+    if (options.json === true) {
+      console.log(JSON.stringify({
+        query,
+        results: hits.map((hit) => ({
+          id: hit.id,
+          source: hit.source,
+          citation_source: hit.citation_source,
+          chunk_idx: hit.chunk_idx,
+          score: hit.score,
+          match: hit.match,
+          ...(hit.branch_name ? { branch: hit.branch_name } : {}),
+          preview: excerpt(hit.snippet ?? hit.text)
+        }))
+      }, null, 2));
+      return;
+    }
     if (hits.length === 0) {
       console.log("No results.");
       return;
@@ -391,6 +435,95 @@ Examples:
     }
 
     console.log(formatWorkspaceContextMarkdown(context));
+  });
+
+program
+  .command("file-context")
+  .description("Build file-focused context from indexed chunks and retained notes.")
+  .summary("Inspect indexed context and retained memories linked to specific files.")
+  .argument("<files...>", "workspace file paths")
+  .option("--term <term>", "additional query term; repeatable", collectOption, [])
+  .option("-k, --top-k <number>", "number of search hits to include", parsePositiveInteger, 8)
+  .option("--fresh", "refresh changed, deleted, or new source files before building file context")
+  .option("--include-superseded-memories", "include retained notes that have been superseded")
+  .option("--json", "output structured JSON")
+  .addHelpText("after", `
+
+Examples:
+  $ kbx file-context src/search.ts
+  $ kbx file-context src/search.ts src/mcp.ts --term graph --json
+`)
+  .action(async (
+    files: string[],
+    options: {
+      term: string[];
+      topK: number;
+      fresh?: boolean;
+      includeSupersededMemories?: boolean;
+      json?: boolean;
+    }
+  ) => {
+    const workspace = await requireWorkspace();
+    await maybeStartConfiguredWatch(workspace);
+    if (options.fresh === true) {
+      await refreshWorkspaceFreshness(workspace);
+    }
+
+    const result = await buildFileContext(workspace, files, options.term, options.topK, {
+      includeSupersededMemories: options.includeSupersededMemories === true
+    });
+    if (options.json === true) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log(`Files: ${result.files.join(", ")}`);
+    if (result.linked_memories.length > 0) {
+      console.log("Retained memories:");
+      for (const memory of result.linked_memories.slice(0, 10)) {
+        console.log(`- ${memory.title} [${memory.type}/${memory.retention.tier}]`);
+      }
+    } else {
+      console.log("Retained memories: none");
+    }
+    if (result.search_results.length > 0) {
+      console.log("Search results:");
+      for (const [index, hit] of result.search_results.entries()) {
+        console.log(`${index + 1}. ${hit.source}#${hit.chunk_idx} (${hit.score.toFixed(3)}, ${hit.match})`);
+        console.log(indent(excerpt(hit.preview)));
+      }
+    } else {
+      console.log("Search results: none");
+    }
+  });
+
+program
+  .command("inspect")
+  .description("Show a read-only summary of the current workspace knowledge base.")
+  .summary("Inspect sources, freshness, retained memory, and graph state.")
+  .option("--source-limit <number>", "maximum recent indexed files to include", parsePositiveInteger, 20)
+  .option("--memory-limit <number>", "maximum retained memory notes to include", parsePositiveInteger, 20)
+  .option("--json", "output structured JSON")
+  .action(async (options: { sourceLimit: number; memoryLimit: number; json?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const inspection = await buildWorkspaceInspection(workspace, {
+      sourceLimit: options.sourceLimit,
+      memoryLimit: options.memoryLimit
+    });
+    if (options.json === true) {
+      console.log(JSON.stringify(inspection, null, 2));
+      return;
+    }
+
+    console.log("kbx inspect");
+    console.log(`Workspace: ${inspection.workspace.name} (${inspection.workspace.id.slice(0, 8)})`);
+    console.log(`Model: ${inspection.model.id} (${inspection.model.dim}d)`);
+    console.log(`Files: ${inspection.index.files}`);
+    console.log(`Chunks: ${inspection.index.chunks}`);
+    console.log(`Freshness: ${"stale" in inspection.index.freshness ? `${inspection.index.freshness.stale} stale, ${inspection.index.freshness.deleted} deleted, ${inspection.index.freshness.newFiles} new` : "unavailable"}`);
+    console.log(`Sources: ${inspection.sources.length}`);
+    console.log(`Memories: ${inspection.memories.total} total, ${inspection.memories.latest} latest, ${inspection.memories.superseded} superseded`);
+    console.log(`Graph: ${inspection.graph ? "available" : "not built"}`);
   });
 
 program
@@ -1068,6 +1201,8 @@ Examples:
   $ kbx memory add "Decision: keep v1 retrieval-only." --retention-days 30
   $ kbx memory add "ADR follow-up: revisit hooks after MCP adapters settle." --title "Hook follow-up" --retention-days 14
   $ kbx memory list
+  $ kbx memory verify <memory-id>
+  $ kbx memory history <memory-id>
   $ kbx memory prune
 
 Session memory stores compact notes under .kbx/sessions and indexes them only after explicit retention is provided.
@@ -1078,12 +1213,22 @@ memoryCommand
   .description("Add a compact session memory note and index it.")
   .argument("<text>", "compact summary or event to remember")
   .option("--title <title>", "short memory title")
+  .option("--type <type>", "memory type: decision, preference, architecture, bug, workflow, fact, handoff, or event", validateMemoryType, "fact")
+  .option("--file <path>", "relevant workspace file path (repeatable)", collectValues, [])
+  .option("--tag <tag>", "memory tag (repeatable)", collectValues, [])
+  .option("--source-chunk-id <id>", "supporting chunk id (repeatable)", collectValues, [])
+  .option("--supersedes <id>", "older memory id superseded by this note (repeatable)", collectValues, [])
   .requiredOption("--retention-days <days>", "number of days before this memory expires", parsePositiveInteger)
-  .action(async (text: string, options: { title?: string; retentionDays: number }) => {
+  .action(async (text: string, options: { title?: string; type: "decision" | "preference" | "architecture" | "bug" | "workflow" | "fact" | "handoff" | "event"; file: string[]; tag: string[]; sourceChunkId: string[]; supersedes: string[]; retentionDays: number }) => {
     const workspace = await requireWorkspace();
     const { entry, source } = await addSessionMemory(workspace, {
       text,
       title: options.title,
+      type: options.type,
+      files: options.file,
+      tags: options.tag,
+      sourceChunkIds: options.sourceChunkId,
+      supersedes: options.supersedes,
       retentionDays: options.retentionDays
     });
     const result = await ingestSource(workspace, source);
@@ -1104,7 +1249,62 @@ memoryCommand
     }
 
     for (const entry of entries) {
-      console.log(`${entry.id.slice(0, 8)}  ${entry.title}  expires ${entry.expires_at}`);
+      console.log(`${entry.id.slice(0, 8)}  [${entry.type}/${entry.retention.tier} ${entry.retention.score.toFixed(2)}] ${entry.title}  expires ${entry.expires_at}`);
+    }
+  });
+
+memoryCommand
+  .command("verify")
+  .description("Verify a memory's supporting indexed chunk citations.")
+  .argument("<id>", "memory id or unique id prefix")
+  .option("--json", "output structured JSON")
+  .action(async (id: string, options: { json?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const verification = await buildMemoryVerification(workspace, id);
+    if (options.json === true) {
+      console.log(JSON.stringify(verification, null, 2));
+      return;
+    }
+
+    console.log(`Memory: ${verification.memory.title} (${verification.memory.id})`);
+    console.log(`Status: ${verification.status}`);
+    console.log(`Type: ${verification.memory.type}`);
+    console.log(`Latest: ${verification.memory.is_latest ? "yes" : "no"}`);
+    console.log(`Retention: ${verification.memory.retention.tier} ${verification.memory.retention.score.toFixed(2)}, ${verification.memory.retention.days_remaining} day(s) remaining`);
+    if (verification.memory.superseded_by) {
+      console.log(`Superseded by: ${verification.memory.superseded_by}`);
+    }
+    if (verification.memory.supersedes.length > 0) {
+      console.log(`Supersedes: ${verification.memory.supersedes.join(", ")}`);
+    }
+    console.log(`Support chunks: ${verification.citations.length}/${verification.memory.source_chunk_ids.length}`);
+    for (const citation of verification.citations) {
+      console.log(`- ${citation.id} ${citation.source}#${citation.chunk_idx}`);
+    }
+    if (verification.missing_source_chunk_ids.length > 0) {
+      console.log(`Missing: ${verification.missing_source_chunk_ids.join(", ")}`);
+    }
+  });
+
+memoryCommand
+  .command("history")
+  .description("Show a retained memory supersession history chain.")
+  .argument("<id>", "memory id or unique id prefix")
+  .option("--json", "output structured JSON")
+  .action(async (id: string, options: { json?: boolean }) => {
+    const workspace = await requireWorkspace();
+    const history = await buildMemoryHistory(workspace, id);
+    if (options.json === true) {
+      console.log(JSON.stringify(history, null, 2));
+      return;
+    }
+
+    console.log(`Memory history: ${history.memory.title} (${history.memory.id})`);
+    console.log(`Chain: ${history.summary.chain_length} total, ${history.summary.latest} latest, ${history.summary.superseded} superseded`);
+    for (const entry of history.chain) {
+      const marker = entry.id === history.memory.id ? "*" : "-";
+      const state = entry.is_latest ? "latest" : `superseded by ${entry.superseded_by ?? "unknown"}`;
+      console.log(`${marker} ${entry.id} [${entry.type}/${entry.retention.tier}] ${entry.title} (${state})`);
     }
   });
 
@@ -1326,7 +1526,8 @@ graphCommand
   .description("Query graph nodes and their immediate relations.")
   .argument("<query>", "node, symbol, heading, dependency, or memory term")
   .option("--limit <number>", "maximum matching nodes", parsePositiveInteger, 20)
-  .action(async (query: string, options: { limit: number }) => {
+  .option("--json", "output structured JSON")
+  .action(async (query: string, options: { limit: number; json?: boolean }) => {
     const workspace = await requireWorkspace();
     console.log(JSON.stringify(await queryGraph(workspace, query, { limit: options.limit }), null, 2));
   });
@@ -1923,6 +2124,22 @@ function parseSessionEventType(value: string): SessionEventType {
   }
 }
 
+function validateMemoryType(value: string): "decision" | "preference" | "architecture" | "bug" | "workflow" | "fact" | "handoff" | "event" {
+  switch (value) {
+    case "decision":
+    case "preference":
+    case "architecture":
+    case "bug":
+    case "workflow":
+    case "fact":
+    case "handoff":
+    case "event":
+      return value;
+    default:
+      throw new Error("Expected memory type decision, preference, architecture, bug, workflow, fact, handoff, or event");
+  }
+}
+
 function parseJsonLiteral(value: string, optionName: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -1933,6 +2150,10 @@ function parseJsonLiteral(value: string, optionName: string): unknown {
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+function collectValues(value: string, previous: string[]): string[] {
+  return collectOption(value, previous);
 }
 
 async function readStdin(): Promise<string> {

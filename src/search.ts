@@ -1,9 +1,12 @@
 import { createEmbedder } from "./embedding";
 import { branchIndexExists, currentBranchContext } from "./branch";
+import { parseChunkTags } from "./chunk-tags";
+import { queryGraph } from "./graph-store";
 import { loadIndexStats } from "./indexer";
 import { LexicalIndexStore } from "./lexical-index";
 import { rerankSearchHitsWithOptionalModel } from "./retrieval";
 import type { RerankerOptions } from "./reranker";
+import { listSessionMemories } from "./session-memory";
 import { loadManifest, loadRegistry, type Workspace, workspaceFromRoot } from "./workspace";
 import type { SearchHit } from "./types";
 import { ChunkVectorStore } from "./vector-store";
@@ -14,6 +17,11 @@ const RRF_K = 60;
 
 export interface SearchWorkspaceOptions {
   reranker?: RerankerOptions;
+  includeSupersededMemories?: boolean;
+  graph?: {
+    enabled?: boolean;
+    maxNodes?: number;
+  };
 }
 
 export interface GlobalSearchHit extends SearchHit {
@@ -52,13 +60,26 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
   let vectorHits: SearchHit[];
   let lexicalHits: SearchHit[];
+  let graphHits: SearchHit[] = [];
   try {
     vectorHits = expandVectorHits(lexical, rawVectorHits, branchScope, filterToBranch, Math.max(topK * 4, 20));
     lexicalHits = branchFilter(lexical.search(query, Math.max(topK * 12, 50)), branchScope, filterToBranch);
+    if (options.graph?.enabled === true) {
+      graphHits = branchFilter(
+        await graphExpandedHits(workspace, lexical, query, Math.max(options.graph.maxNodes ?? topK * 4, 20)),
+        branchScope,
+        filterToBranch
+      );
+    }
+    [vectorHits, lexicalHits, graphHits] = await Promise.all([
+      latestSessionMemoryHits(workspace, vectorHits, options.includeSupersededMemories === true),
+      latestSessionMemoryHits(workspace, lexicalHits, options.includeSupersededMemories === true),
+      latestSessionMemoryHits(workspace, graphHits, options.includeSupersededMemories === true)
+    ]);
   } finally {
     await lexical.close();
   }
-  return fuseHits(query, vectorHits, lexicalHits, topK, options);
+  return fuseHits(query, vectorHits, lexicalHits, graphHits, topK, options);
 }
 
 function expandVectorHits(
@@ -98,7 +119,7 @@ function branchFilter(hits: SearchHit[], branchScope: string | undefined, enable
   if (!enabled || !branchScope) {
     return hits;
   }
-  return hits.filter((hit) => hit.branch_scope === branchScope);
+  return hits.filter((hit) => hit.branch_scope === branchScope || isUnscopedLocalKnowledge(hit));
 }
 
 export async function searchRegisteredWorkspaces(
@@ -143,7 +164,40 @@ function assertSearchQuery(query: string): void {
   }
 }
 
-async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: SearchHit[], topK: number, options: SearchWorkspaceOptions): Promise<SearchHit[]> {
+async function graphExpandedHits(
+  workspace: Workspace,
+  lexical: LexicalIndexStore,
+  query: string,
+  limit: number
+): Promise<SearchHit[]> {
+  try {
+    const graph = await queryGraph(workspace, query, { limit });
+    const scoredChunkIds = new Map<string, number>();
+    for (const node of graph.nodes) {
+      if (node.first_seen_chunk_id) {
+        scoredChunkIds.set(node.first_seen_chunk_id, Math.max(scoredChunkIds.get(node.first_seen_chunk_id) ?? 0, 0.55));
+      }
+      for (const edge of node.edges) {
+        if (edge.chunk_id) {
+          scoredChunkIds.set(edge.chunk_id, Math.max(scoredChunkIds.get(edge.chunk_id) ?? 0, edge.weight));
+        }
+      }
+    }
+
+    return [...scoredChunkIds.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([id, score]) => {
+        const chunk = lexical.getChunk(id);
+        return chunk ? chunkToSearchHit(chunk, score, "graph") : null;
+      })
+      .filter((hit): hit is SearchHit => hit !== null);
+  } catch {
+    return [];
+  }
+}
+
+async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: SearchHit[], graphHits: SearchHit[], topK: number, options: SearchWorkspaceOptions): Promise<SearchHit[]> {
   const byId = new Map<string, SearchHit & { fusionScore: number }>();
   for (const [index, hit] of vectorHits.entries()) {
     const existing = byId.get(hit.id);
@@ -152,7 +206,7 @@ async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: Sea
       ...(existing ?? hit),
       snippet: existing?.snippet ?? hit.snippet,
       score: Math.max(existing?.score ?? 0, hit.score),
-      match: existing && existing.match !== "vector" ? "hybrid" : "vector",
+      match: combineMatch(existing?.match, "vector"),
       fusionScore
     });
   }
@@ -164,7 +218,19 @@ async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: Sea
       ...(existing ?? hit),
       snippet: existing?.snippet ?? hit.snippet,
       score: Math.max(existing?.score ?? 0, hit.score),
-      match: existing ? "hybrid" : "lexical",
+      match: combineMatch(existing?.match, "lexical"),
+      fusionScore
+    });
+  }
+
+  for (const [index, hit] of graphHits.entries()) {
+    const existing = byId.get(hit.id);
+    const fusionScore = (existing?.fusionScore ?? 0) + (1 / (RRF_K + index + 1)) + hit.score;
+    byId.set(hit.id, {
+      ...(existing ?? hit),
+      snippet: existing?.snippet ?? hit.snippet,
+      score: Math.max(existing?.score ?? 0, hit.score),
+      match: combineMatch(existing?.match, "graph"),
       fusionScore
     });
   }
@@ -174,6 +240,57 @@ async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: Sea
     .map(({ fusionScore: _fusionScore, ...hit }) => hit);
 
   return (await rerankSearchHitsWithOptionalModel(query, fused, options.reranker)).slice(0, topK);
+}
+
+function combineMatch(existing: SearchHit["match"] | undefined, next: SearchHit["match"]): SearchHit["match"] {
+  if (!existing || existing === next) {
+    return next;
+  }
+  return "hybrid";
+}
+
+function chunkToSearchHit(chunk: SearchHitSourceChunk, score: number, match: SearchHit["match"]): SearchHit {
+  const tags = parseChunkTags(chunk.tags);
+  return {
+    id: chunk.id,
+    content_id: chunk.content_id,
+    source: chunk.human_source,
+    citation_source: chunk.citation_source,
+    chunk_idx: chunk.chunk_idx,
+    score,
+    text: chunk.text,
+    match,
+    branch_scope: tags.branch_scope,
+    branch_name: tags.branch_name,
+    git_head: tags.git_head,
+    content_hash: tags.content_hash
+  };
+}
+
+type SearchHitSourceChunk = NonNullable<ReturnType<LexicalIndexStore["getChunk"]>>;
+
+async function latestSessionMemoryHits(workspace: Workspace, hits: SearchHit[], includeSuperseded: boolean): Promise<SearchHit[]> {
+  if (includeSuperseded || hits.length === 0 || !hits.some((hit) => sessionMemoryId(hit))) {
+    return hits;
+  }
+  const latestIds = new Set((await listSessionMemories(workspace))
+    .filter((memory) => memory.is_latest)
+    .map((memory) => memory.id));
+  return hits.filter((hit) => {
+    const id = sessionMemoryId(hit);
+    return id === null || latestIds.has(id);
+  });
+}
+
+function sessionMemoryId(hit: SearchHit): string | null {
+  const source = hit.source.startsWith("session-memory:") ? hit.source : hit.citation_source;
+  return source.startsWith("session-memory:") ? source.slice("session-memory:".length) : null;
+}
+
+function isUnscopedLocalKnowledge(hit: SearchHit): boolean {
+  return hit.citation_source.startsWith("session-memory:")
+    || hit.source.startsWith("session-memory:")
+    || hit.citation_source.startsWith("external:");
 }
 
 async function exists(filePath: string): Promise<boolean> {

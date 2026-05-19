@@ -40,8 +40,9 @@ import {
 } from "./session-store";
 import { LexicalIndexStore } from "./lexical-index";
 import { KBX_VERSION } from "./version";
-import type { IndexStats, SourceEntry } from "./types";
+import type { IndexStats, SourceEntry, WorkspaceConfig } from "./types";
 import { watchStatus } from "./watch";
+import { buildFileContext, buildMemoryHistory, buildMemoryVerification, buildWorkspaceInspection } from "./inspection";
 
 const DEFAULT_SEARCH_PREVIEW_CHARS = 360;
 const MCP_SEARCH_AUTO_REFRESH_MAX_CHANGES = 25;
@@ -65,12 +66,15 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
   server.registerTool(
     "kbx_search",
     {
-      description: "Search the user's local kbx knowledge base. Returns previews and chunk IDs; call kbx_get_chunk for full text.",
+      description: "Search the user's local kbx knowledge base. Returns compact previews by default, or expands specific chunk IDs when expand_ids is provided.",
       inputSchema: {
-        query: z.string().trim().min(1).describe("Search query"),
+        query: z.string().trim().min(1).optional().describe("Search query"),
+        expand_ids: z.array(z.string().trim().min(1)).min(1).max(20).optional().describe("Chunk IDs to expand into full text without running a new search"),
         top_k: z.number().int().min(1).max(50).optional().describe("Number of chunks to return"),
         preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
-        include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer kbx_get_chunk unless full text is explicitly needed.")
+        include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer expand_ids or kbx_get_chunk unless full text is explicitly needed."),
+        use_graph: z.boolean().optional().describe("Include graph-expanded candidates when a graph has been built. Off by default."),
+        include_superseded_memories: z.boolean().optional().describe("Include retained notes that have been superseded. Off by default for active context.")
       },
       annotations: {
         readOnlyHint: false,
@@ -78,9 +82,32 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         openWorldHint: false
       }
     },
-    async ({ query, top_k, preview_chars, include_text }) => {
+    async ({ query, expand_ids, top_k, preview_chars, include_text, use_graph, include_superseded_memories }) => {
+      const config = await loadConfig(workspace);
+      if (expand_ids && expand_ids.length > 0) {
+        const expanded = await expandSearchIds(workspace, expand_ids, config.mcp.citations);
+        return textResult(JSON.stringify({
+          mode: "expanded",
+          results: expanded.results,
+          missing_ids: expanded.missingIds,
+          truncated: expand_ids.length > expanded.requested,
+          next: "Use kbx_search with a query for a fresh compact search, or kbx_get_chunk for one specific chunk."
+        }, null, 2));
+      }
+      if (!query) {
+        return textResult(JSON.stringify({
+          mode: "compact",
+          error: "query is required unless expand_ids is provided"
+        }, null, 2), true);
+      }
+
       const freshness = await autoRefreshForSearch(workspace);
-      const [hits, config] = await Promise.all([searchWorkspace(workspace, query, top_k ?? 5), loadConfig(workspace)]);
+      const hits = await searchWorkspace(workspace, query, top_k ?? 5, {
+        includeSupersededMemories: include_superseded_memories === true,
+        graph: {
+          enabled: use_graph === true
+        }
+      });
       const results = hits.map((hit) => ({
         id: hit.id,
         source: config.mcp.citations === "safe" ? hit.citation_source : hit.source,
@@ -92,10 +119,11 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         ...(include_text === true ? { text: hit.text } : {})
       }));
       return textResult(JSON.stringify({
+        mode: "compact",
         query,
         freshness,
         results,
-        next: "Call kbx_get_chunk with a result id when you need the full chunk text."
+        next: "Call kbx_search with expand_ids for several full chunks, or kbx_get_chunk with one result id."
       }, null, 2));
     }
   );
@@ -108,7 +136,8 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         queries: z.array(z.string().trim().min(1)).min(1).max(10).describe("Search queries"),
         top_k: z.number().int().min(1).max(20).optional().describe("Results per query"),
         preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
-        include_text: z.boolean().optional().describe("Include full chunk text in results. Prefer false unless explicitly needed.")
+        include_text: z.boolean().optional().describe("Include full chunk text in results. Prefer false unless explicitly needed."),
+        include_superseded_memories: z.boolean().optional().describe("Include retained notes that have been superseded. Off by default for active context.")
       },
       annotations: {
         readOnlyHint: false,
@@ -116,11 +145,13 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         openWorldHint: false
       }
     },
-    async ({ queries, top_k, preview_chars, include_text }) => {
+    async ({ queries, top_k, preview_chars, include_text, include_superseded_memories }) => {
       const freshness = await autoRefreshForSearch(workspace);
       const config = await loadConfig(workspace);
       const searches = await Promise.all(queries.map(async (query) => {
-        const hits = await searchWorkspace(workspace, query, top_k ?? 5);
+        const hits = await searchWorkspace(workspace, query, top_k ?? 5, {
+          includeSupersededMemories: include_superseded_memories === true
+        });
         return {
           query,
           results: hits.map((hit) => ({
@@ -176,15 +207,18 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         query: z.string().trim().min(1).describe("Search query"),
         top_k: z.number().int().min(1).max(50).optional().describe("Number of chunks to return"),
         preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
-        include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer kbx_get_chunk in the owning workspace unless full text is explicitly needed.")
+        include_text: z.boolean().optional().describe("Include full chunk text in search results. Prefer kbx_get_chunk in the owning workspace unless full text is explicitly needed."),
+        include_superseded_memories: z.boolean().optional().describe("Include retained notes that have been superseded. Off by default for active context.")
       },
       annotations: {
         readOnlyHint: true,
         openWorldHint: false
       }
     },
-    async ({ query, top_k, preview_chars, include_text }) => {
-      const hits = await searchRegisteredWorkspaces(query, top_k ?? 5);
+    async ({ query, top_k, preview_chars, include_text, include_superseded_memories }) => {
+      const hits = await searchRegisteredWorkspaces(query, top_k ?? 5, {
+        includeSupersededMemories: include_superseded_memories === true
+      });
       return textResult(JSON.stringify({
         query,
         results: hits.map((hit) => ({
@@ -378,6 +412,11 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
       inputSchema: {
         text: z.string().trim().min(1).max(10000).describe("Compact note, decision, handoff, or event to retain"),
         title: z.string().trim().min(1).max(120).optional().describe("Short title for the retained note"),
+        type: z.enum(["decision", "preference", "architecture", "bug", "workflow", "fact", "handoff", "event"]).optional().describe("Memory type used for lifecycle scoring"),
+        files: z.array(z.string().trim().min(1).max(500)).max(50).optional().describe("Relevant workspace file paths"),
+        tags: z.array(z.string().trim().min(1).max(80)).max(50).optional().describe("Compact tags for later filtering/search"),
+        source_chunk_ids: z.array(z.string().trim().min(1).max(120)).max(50).optional().describe("Chunk IDs that support this memory"),
+        supersedes: z.array(z.string().trim().min(1).max(120)).max(50).optional().describe("Older memory IDs superseded by this memory"),
         retention_days: z.number().int().min(1).max(3650).describe("Number of days before the note expires")
       },
       annotations: {
@@ -386,10 +425,15 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         openWorldHint: false
       }
     },
-    async ({ text, title, retention_days }) => {
+    async ({ text, title, type, files, tags, source_chunk_ids, supersedes, retention_days }) => {
       const { entry, source } = await addSessionMemory(workspace, {
         text,
         title,
+        type,
+        files,
+        tags,
+        sourceChunkIds: source_chunk_ids,
+        supersedes,
         retentionDays: retention_days
       });
       const indexed = await ingestSource(workspace, source);
@@ -422,6 +466,88 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
         retention_days: source?.retention_days ?? null,
         entries
       }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_memory_verify",
+    {
+      description: "Verify a retained memory's supporting indexed chunk citations.",
+      inputSchema: {
+        id: z.string().min(1).describe("Memory id or unique id prefix")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ id }) => textResult(JSON.stringify(await buildMemoryVerification(workspace, id), null, 2))
+  );
+
+  server.registerTool(
+    "kbx_memory_history",
+    {
+      description: "Return the supersession history chain for a retained memory.",
+      inputSchema: {
+        id: z.string().min(1).describe("Memory id or unique id prefix")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ id }) => textResult(JSON.stringify(await buildMemoryHistory(workspace, id), null, 2))
+  );
+
+  server.registerTool(
+    "kbx_file_context",
+    {
+      description: "Return file-focused indexed context and retained memories for active edit or review work.",
+      inputSchema: {
+        files: z.array(z.string().trim().min(1).max(500)).min(1).max(20).describe("Workspace file paths to gather context for"),
+        terms: z.array(z.string().trim().min(1).max(120)).max(20).optional().describe("Optional additional query terms"),
+        top_k: z.number().int().min(1).max(20).optional().describe("Maximum search hits to include"),
+        include_superseded_memories: z.boolean().optional().describe("Include retained notes that have been superseded. Off by default for active context.")
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ files, terms, top_k, include_superseded_memories }) => {
+      const freshness = await autoRefreshForSearch(workspace);
+      return textResult(JSON.stringify({
+        freshness,
+        ...await buildFileContext(workspace, files, terms ?? [], top_k ?? 8, {
+          includeSupersededMemories: include_superseded_memories === true
+        })
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_inspect",
+    {
+      description: "Return a read-only workspace knowledge summary for local inspection.",
+      inputSchema: {
+        source_limit: z.number().int().min(1).max(100).optional().describe("Maximum recent indexed files to include"),
+        memory_limit: z.number().int().min(1).max(100).optional().describe("Maximum retained memory notes to include")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ source_limit, memory_limit }) => {
+      return textResult(JSON.stringify(
+        await buildWorkspaceInspection(workspace, {
+          sourceLimit: source_limit ?? 20,
+          memoryLimit: memory_limit ?? 20
+        }),
+        null,
+        2
+      ));
     }
   );
 
@@ -997,6 +1123,56 @@ function textResult(text: string, isError = false) {
       }
     ],
     isError
+  };
+}
+
+async function expandSearchIds(
+  workspace: Workspace,
+  ids: string[],
+  citationMode: WorkspaceConfig["mcp"]["citations"]
+): Promise<{
+  requested: number;
+  missingIds: string[];
+  results: Array<{
+    id: string;
+    source: string;
+    chunk_idx: number;
+    mtime: number;
+    text: string;
+  }>;
+}> {
+  const requestedIds = [...new Set(ids)].slice(0, 20);
+  const missingIds: string[] = [];
+  const results: Array<{
+    id: string;
+    source: string;
+    chunk_idx: number;
+    mtime: number;
+    text: string;
+  }> = [];
+  const lexical = await LexicalIndexStore.open(workspace, { readOnly: true });
+  try {
+    for (const id of requestedIds) {
+      const chunk = lexical.getChunk(id);
+      if (!chunk) {
+        missingIds.push(id);
+        continue;
+      }
+      results.push({
+        id: chunk.id,
+        source: citationMode === "safe" ? chunk.citation_source : chunk.source,
+        chunk_idx: chunk.chunk_idx,
+        mtime: chunk.mtime,
+        text: chunk.text
+      });
+    }
+  } finally {
+    await lexical.close();
+  }
+  return {
+    requested: requestedIds.length,
+    missingIds,
+    results
   };
 }
 

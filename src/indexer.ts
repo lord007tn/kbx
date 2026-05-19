@@ -10,7 +10,7 @@ import { loadConfig, loadManifest, loadSources, saveManifest, saveSources, touch
 import { coversSource, normalizeSources, sourceForIngestTarget } from "./sources";
 import { SCHEMA_VERSION, type ChunkRecord, type EmbeddedChunkRecord, type IndexedFileStats, type IndexStats, type SourceEntry, type WorkspaceManifest } from "./types";
 import { ChunkVectorStore } from "./vector-store";
-import { access, cp, mkdir, rename, rm } from "node:fs/promises";
+import { access, cp, mkdir, rename, rm, stat } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -24,6 +24,33 @@ async function renamePath(from: string, to: string): Promise<void> {
 
 async function removePath(target: string, options: { recursive?: boolean; force?: boolean } = {}): Promise<void> {
   await retryWindowsFsOperation(() => rm(target, options));
+}
+
+async function moveCollectionPath(from: string, to: string, options: { allowSourceRemain?: boolean } = {}): Promise<void> {
+  try {
+    await renamePath(from, to);
+    return;
+  } catch (error) {
+    if (process.platform !== "win32" || !isRetryableWindowsFsError(error) || !await isDirectory(from)) {
+      throw error;
+    }
+  }
+
+  await removePath(to, { recursive: true, force: true });
+  await retryWindowsFsOperation(() => cp(from, to, { recursive: true, force: true }));
+  if (options.allowSourceRemain === true) {
+    await removePath(from, { recursive: true, force: true }).catch(() => undefined);
+    return;
+  }
+  await removePath(from, { recursive: true, force: true });
+}
+
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await stat(target)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 async function retryWindowsFsOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -189,7 +216,7 @@ async function ingestSourceDirect(workspace: Workspace, source: SourceEntry, opt
       const relativePath = indexedRelativePath(fileKey, indexed);
       if (
         sourceIncludesFile(source, relativePath)
-        && isIndexedInBranch(indexed, branch?.scope)
+        && isCurrentIngestScope(indexed, branch?.scope)
         && !currentFilePaths.has(fileKey)
       ) {
         deleteSourceAlias(store, lexical, fileKey);
@@ -414,7 +441,7 @@ async function swapIngestedIndex(
 
   try {
     if (await exists(workspace.collectionDir)) {
-      await renamePath(workspace.collectionDir, backupCollectionDir);
+      await moveCollectionPath(workspace.collectionDir, backupCollectionDir);
       backedUpCollection = true;
     }
     if (await exists(workspace.lexicalPath)) {
@@ -430,7 +457,7 @@ async function swapIngestedIndex(
       backedUpSources = true;
     }
 
-    await renamePath(tempWorkspace.collectionDir, workspace.collectionDir);
+    await moveCollectionPath(tempWorkspace.collectionDir, workspace.collectionDir, { allowSourceRemain: true });
     if (await exists(tempWorkspace.lexicalPath)) {
       await renamePath(tempWorkspace.lexicalPath, workspace.lexicalPath);
     } else {
@@ -455,7 +482,7 @@ async function swapIngestedIndex(
       options.includeSources === true ? removePath(workspace.sourcesPath, { force: true }) : Promise.resolve()
     ]);
     if (backedUpCollection) {
-      await renamePath(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
+      await moveCollectionPath(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
     }
     if (backedUpLexical) {
       await renamePath(backupLexicalPath, workspace.lexicalPath).catch(() => undefined);
@@ -530,6 +557,13 @@ function totalIndexedChunks(stats: IndexStats): number {
 
 function indexedFileUnchanged(indexed: IndexedFileStats, file: Pick<SourceFileEntry, "mtime" | "size">): boolean {
   return indexed.mtime === file.mtime && indexed.size === file.size;
+}
+
+function isCurrentIngestScope(indexed: IndexedFileStats, branchScope: string | undefined): boolean {
+  if (isIndexedInBranch(indexed, branchScope)) {
+    return true;
+  }
+  return branchScope !== undefined && indexed.branch_scope === undefined;
 }
 
 export async function refreshWorkspaceIndex(workspace: Workspace, options: IngestProgressOptions = {}): Promise<RefreshResult> {
@@ -884,7 +918,7 @@ async function swapRebuiltIndex(workspace: Workspace, tempWorkspace: Workspace, 
 
   try {
     if (await exists(workspace.collectionDir)) {
-      await renamePath(workspace.collectionDir, backupCollectionDir);
+      await moveCollectionPath(workspace.collectionDir, backupCollectionDir);
       backedUpCollection = true;
     }
     if (await exists(workspace.statsPath)) {
@@ -896,7 +930,7 @@ async function swapRebuiltIndex(workspace: Workspace, tempWorkspace: Workspace, 
       backedUpLexical = true;
     }
 
-    await renamePath(tempWorkspace.collectionDir, workspace.collectionDir);
+    await moveCollectionPath(tempWorkspace.collectionDir, workspace.collectionDir, { allowSourceRemain: true });
     if (await exists(tempWorkspace.lexicalPath)) {
       await renamePath(tempWorkspace.lexicalPath, workspace.lexicalPath);
     } else {
@@ -917,7 +951,7 @@ async function swapRebuiltIndex(workspace: Workspace, tempWorkspace: Workspace, 
       removePath(workspace.statsPath, { force: true })
     ]);
     if (backedUpCollection) {
-      await renamePath(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
+      await moveCollectionPath(backupCollectionDir, workspace.collectionDir).catch(() => undefined);
     }
     if (backedUpStats) {
       await renamePath(backupStatsPath, workspace.statsPath).catch(() => undefined);
