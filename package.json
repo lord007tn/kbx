@@ -1,5 +1,5 @@
 {
-  "name": "@lord007tn/kbx",
+  "name": "@kbx/cli",
   "version": "0.1.0",
   "description": "Local-first knowledge base CLI for searchable AI context.",
   "license": "MIT",

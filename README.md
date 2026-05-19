@@ -18,11 +18,11 @@ It stores workspace data under `.kbx/`, runs locally, and exposes retrieval thro
 ## Install
 
 ```bash
-npx -y @lord007tn/kbx --help
-npx -y @lord007tn/kbx setup --model minilm
-npx -y @lord007tn/kbx init --model minilm
-npx -y @lord007tn/kbx ingest
-npx -y @lord007tn/kbx search "your query"
+npx -y @kbx/cli --help
+npx -y @kbx/cli setup --model minilm
+npx -y @kbx/cli init --model minilm
+npx -y @kbx/cli ingest
+npx -y @kbx/cli search "your query"
 ```
 
 Requires Node.js `>=20.19.0`. The npm/npx package is the supported distribution path for this alpha.
@@ -32,10 +32,10 @@ Requires Node.js `>=20.19.0`. The npm/npx package is the supported distribution 
 From a workspace you want to index:
 
 ```bash
-npx -y @lord007tn/kbx init --model minilm
-npx -y @lord007tn/kbx ingest
-npx -y @lord007tn/kbx search "project decisions"
-npx -y @lord007tn/kbx doctor
+npx -y @kbx/cli init --model minilm
+npx -y @kbx/cli ingest
+npx -y @kbx/cli search "project decisions"
+npx -y @kbx/cli doctor
 ```
 
 ## Development
@@ -261,7 +261,7 @@ A tiny example corpus lives under `examples/retrieval-eval/`.
 
 ## npm Release
 
-`kbx` is distributed as the scoped npm package `@lord007tn/kbx` and is intended to run directly through `npx -y @lord007tn/kbx ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, Claude Code plugin metadata, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with `secrets.NPM_TOKEN`, and creates a Conventional Commits changelog release with [antfu/changelogithub](https://github.com/antfu/changelogithub).
+`kbx` is distributed as the scoped npm package `@kbx/cli` and is intended to run directly through `npx -y @kbx/cli ...` or an npm-installed `kbx` binary. `npm run smoke:pack` verifies the npm package stays small and only contains the CLI build, Claude Code plugin metadata, package metadata, README, and license. `npm run smoke:install` packs the project locally, installs that tarball through `npm exec`, and runs `kbx --version` from outside the repository. The release workflow validates the package, publishes it to npm with `secrets.NPM_TOKEN`, and creates a Conventional Commits changelog release with [antfu/changelogithub](https://github.com/antfu/changelogithub).
 
 See [docs/release.md](docs/release.md) for the release checklist.
 
