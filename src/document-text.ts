@@ -257,8 +257,8 @@ function isEpubTextMediaType(mediaType: string): boolean {
 function extractHtmlText(value: string): string {
   return decodeXmlEntities(value)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[\s\S]*?<\/script\b[^>]*>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style\b[^>]*>/gi, " ")
     .replace(/<\/?(?:p|div|section|article|header|footer|h[1-6]|li|tr|br)\b[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, " ");
 }

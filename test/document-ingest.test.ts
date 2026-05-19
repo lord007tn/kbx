@@ -81,6 +81,29 @@ test("extractIndexableText reads EPUB text", async () => {
   }
 });
 
+test("extractIndexableText strips EPUB script and style blocks with loose end tags", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-epub-filter-"));
+  try {
+    const filePath = path.join(root, "manual.epub");
+    await writeFile(filePath, await makeEpubChapter(`
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <script>script hidden token</script foo="bar">
+    <style>.hidden { content: "style hidden token"; }</style >
+    <p>EPUB visible eta token</p>
+  </body>
+</html>`));
+
+    const text = await extractIndexableText(filePath, ".epub");
+
+    assert.match(text, /EPUB visible eta token/);
+    assert.doesNotMatch(text, /script hidden token/);
+    assert.doesNotMatch(text, /style hidden token/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("extractIndexableText rejects binary content with a text extension", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-binary-text-"));
   try {
@@ -262,6 +285,11 @@ async function makeXlsx(text: string): Promise<Buffer> {
 }
 
 async function makeEpub(text: string): Promise<Buffer> {
+  return makeEpubChapter(`<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapter</h1><p>${escapeXml(text)}</p></body></html>`);
+}
+
+async function makeEpubChapter(chapter: string): Promise<Buffer> {
   const zip = new JSZip();
   zip.file("mimetype", "application/epub+zip");
   zip.folder("META-INF")?.file("container.xml", `<?xml version="1.0" encoding="UTF-8"?>
@@ -273,8 +301,7 @@ async function makeEpub(text: string): Promise<Buffer> {
   <manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
   <spine><itemref idref="chapter"/></spine>
 </package>`);
-  zip.folder("OEBPS")?.file("chapter.xhtml", `<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapter</h1><p>${escapeXml(text)}</p></body></html>`);
+  zip.folder("OEBPS")?.file("chapter.xhtml", chapter);
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
