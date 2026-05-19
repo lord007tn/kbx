@@ -74,7 +74,7 @@
     "changelogithub": "^14.0.0",
     "hyparquet": "^1.25.6",
     "hyparquet-compressors": "^1.1.1",
-    "tsdown": "^0.21.10",
+    "tsdown": "^0.22.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
