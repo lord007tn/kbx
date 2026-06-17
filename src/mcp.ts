@@ -36,6 +36,8 @@ import {
   listSessionEvents,
   listSessions,
   previewSessionRewind,
+  searchRegisteredSessions,
+  searchSessions,
   sessionTimeline
 } from "./session-store";
 import { LexicalIndexStore } from "./lexical-index";
@@ -48,7 +50,7 @@ const DEFAULT_SEARCH_PREVIEW_CHARS = 360;
 const MCP_SEARCH_AUTO_REFRESH_MAX_CHANGES = 25;
 const sessionEventTypeSchema = z.enum(["prompt", "assistant", "tool", "file_edit", "checkpoint", "note", "error", "other"]);
 
-export async function runMcpServer(workspace: Workspace): Promise<void> {
+export async function runMcpServer(workspace: Workspace | null, cwd = process.cwd()): Promise<void> {
   const server = new McpServer({
     name: "kbx",
     version: KBX_VERSION
@@ -57,7 +59,11 @@ export async function runMcpServer(workspace: Workspace): Promise<void> {
   });
 
   registerGuidance(server);
-  registerMcpTools(server, workspace);
+  if (workspace) {
+    registerMcpTools(server, workspace);
+  } else {
+    registerBootstrapMcpTools(server, cwd);
+  }
 
   await server.connect(new StdioServerTransport());
 }
@@ -634,6 +640,40 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
   );
 
   server.registerTool(
+    "kbx_session_search",
+    {
+      description: "Search captured durable kbx session events in the current workspace, or across all registered workspaces with global=true.",
+      inputSchema: {
+        query: z.string().trim().min(1).describe("Session event search query"),
+        global: z.boolean().optional().describe("Search across all registered local kbx workspaces instead of only the current workspace"),
+        client: z.string().trim().min(1).max(80).optional().describe("Filter by session client, such as codex or claude-code"),
+        limit: z.number().int().min(1).max(100).optional().describe("Maximum results to return"),
+        include_payloads: z.boolean().optional().describe("Include stored input/output payloads when sessions.capture=full was enabled")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ query, global, client, limit, include_payloads }) => {
+      const options = {
+        limit: limit ?? 20,
+        client,
+        includePayloads: include_payloads === true
+      };
+      const results = global === true
+        ? await searchRegisteredSessions(query, options)
+        : await searchSessions(workspace, query, options);
+      return textResult(JSON.stringify({
+        query,
+        global: global === true,
+        results,
+        next: "Use kbx_session_replay with a returned session.id when you need the surrounding timeline."
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
     "kbx_session_record_event",
     {
       description: "Record one opt-in durable session event. Raw payloads are only stored when sessions.capture=full.",
@@ -993,6 +1033,298 @@ export function registerMcpTools(server: McpServer, workspace: Workspace): void 
   );
 }
 
+export function registerBootstrapMcpTools(server: McpServer, cwd = process.cwd()): void {
+  const workspaceRequired = () => textResult(JSON.stringify(uninitializedWorkspacePayload(cwd), null, 2), true);
+
+  server.registerTool(
+    "kbx_search",
+    {
+      description: "Search the current kbx workspace. If the current directory is not initialized, returns setup guidance.",
+      inputSchema: {
+        query: z.string().trim().min(1).optional(),
+        expand_ids: z.array(z.string().trim().min(1)).min(1).max(20).optional(),
+        top_k: z.number().int().min(1).max(50).optional(),
+        preview_chars: z.number().int().min(80).max(1200).optional(),
+        include_text: z.boolean().optional(),
+        use_graph: z.boolean().optional(),
+        include_superseded_memories: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_search_many",
+    {
+      description: "Run multiple kbx searches. If the current directory is not initialized, returns setup guidance.",
+      inputSchema: {
+        queries: z.array(z.string().trim().min(1)).min(1).max(10),
+        top_k: z.number().int().min(1).max(20).optional(),
+        preview_chars: z.number().int().min(80).max(1200).optional(),
+        include_text: z.boolean().optional(),
+        include_superseded_memories: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_context",
+    {
+      description: "Build task context from the current kbx workspace. If the current directory is not initialized, returns setup guidance.",
+      inputSchema: {
+        query: z.string().trim().min(1),
+        top_k: z.number().int().min(1).max(25).optional(),
+        max_chars: z.number().int().min(1000).max(60000).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_search_global",
+    {
+      description: "Search across all registered local kbx workspaces. Works even when the current directory is not initialized.",
+      inputSchema: {
+        query: z.string().trim().min(1).describe("Search query"),
+        top_k: z.number().int().min(1).max(50).optional().describe("Number of chunks to return"),
+        preview_chars: z.number().int().min(80).max(1200).optional().describe("Maximum preview characters per result"),
+        include_text: z.boolean().optional().describe("Include full chunk text in search results."),
+        include_superseded_memories: z.boolean().optional().describe("Include retained notes that have been superseded.")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ query, top_k, preview_chars, include_text, include_superseded_memories }) => {
+      const hits = await searchRegisteredWorkspaces(query, top_k ?? 5, {
+        includeSupersededMemories: include_superseded_memories === true
+      });
+      return textResult(JSON.stringify({
+        query,
+        current_workspace: {
+          initialized: false,
+          cwd
+        },
+        results: hits.map((hit) => ({
+          id: hit.id,
+          workspace: hit.workspace,
+          source: hit.citation_source,
+          local_source: hit.local_source,
+          chunk_idx: hit.chunk_idx,
+          score: hit.score,
+          match: hit.match,
+          preview: previewForHit(hit, preview_chars ?? DEFAULT_SEARCH_PREVIEW_CHARS),
+          ...(include_text === true ? { text: hit.text } : {})
+        })),
+        next: hits.length > 0
+          ? "Use the workspace path and local_source to inspect or refresh the owning workspace."
+          : "Initialize this project with `kbx init --model minilm` and `kbx ingest` if you want project-local results."
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_agent_guide",
+    {
+      description: "Return kbx agent usage guidance.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => textResult(KBX_AGENT_GUIDE)
+  );
+
+  server.registerTool(
+    "kbx_index_status",
+    {
+      description: "Report whether the current directory has an initialized kbx workspace.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => textResult(JSON.stringify(uninitializedWorkspacePayload(cwd), null, 2))
+  );
+
+  server.registerTool(
+    "kbx_watch_status",
+    {
+      description: "Report watcher status for the current kbx workspace, or setup guidance when uninitialized.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => textResult(JSON.stringify({
+      ...uninitializedWorkspacePayload(cwd),
+      watcher: {
+        running: false,
+        reason: "workspace_not_initialized"
+      }
+    }, null, 2))
+  );
+
+  server.registerTool(
+    "kbx_list_sources",
+    {
+      description: "List indexed source roots for the current workspace, or setup guidance when uninitialized.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_get_chunk",
+    {
+      description: "Fetch a specific chunk by id, or setup guidance when the current directory is uninitialized.",
+      inputSchema: {
+        id: z.string().min(1)
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_file_context",
+    {
+      description: "Return file-focused indexed context, or setup guidance when the current directory is uninitialized.",
+      inputSchema: {
+        files: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
+        terms: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
+        top_k: z.number().int().min(1).max(20).optional(),
+        include_superseded_memories: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_inspect",
+    {
+      description: "Return a read-only workspace summary, or setup guidance when the current directory is uninitialized.",
+      inputSchema: {
+        source_limit: z.number().int().min(1).max(100).optional(),
+        memory_limit: z.number().int().min(1).max(100).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => workspaceRequired()
+  );
+
+  server.registerTool(
+    "kbx_session_search",
+    {
+      description: "Search captured durable kbx session events across all registered workspaces. Current-workspace session search requires an initialized workspace.",
+      inputSchema: {
+        query: z.string().trim().min(1).describe("Session event search query"),
+        global: z.boolean().optional().describe("Must be true when the current directory is not initialized"),
+        client: z.string().trim().min(1).max(80).optional().describe("Filter by session client, such as codex or claude-code"),
+        limit: z.number().int().min(1).max(100).optional().describe("Maximum results to return"),
+        include_payloads: z.boolean().optional().describe("Include stored input/output payloads when sessions.capture=full was enabled")
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ query, global, client, limit, include_payloads }) => {
+      if (global !== true) {
+        return workspaceRequired();
+      }
+      const results = await searchRegisteredSessions(query, {
+        limit: limit ?? 20,
+        client,
+        includePayloads: include_payloads === true
+      });
+      return textResult(JSON.stringify({
+        query,
+        global: true,
+        current_workspace: {
+          initialized: false,
+          cwd
+        },
+        results,
+        next: "Use the returned workspace path from an initialized session to replay surrounding context."
+      }, null, 2));
+    }
+  );
+
+  server.registerTool(
+    "kbx_mcp_config",
+    {
+      description: "Generate an MCP config snippet for a supported AI client, or list supported clients.",
+      inputSchema: {
+        client: z.string().optional(),
+        list: z.boolean().optional(),
+        server_name: z.string().optional(),
+        command: z.string().optional(),
+        args: z.array(z.string()).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ client, list, server_name, command, args }) => {
+      if (list === true) {
+        return textResult(JSON.stringify({
+          adapters: listAdapters().map((adapter) => ({
+            id: adapter.id,
+            client_name: adapter.clientName,
+            config_path: adapter.configPath,
+            scope: adapter.scope
+          }))
+        }, null, 2));
+      }
+      if (!client) {
+        return textResult(JSON.stringify({
+          error: "missing_client",
+          next: "Call kbx_mcp_config with list=true to see supported clients."
+        }, null, 2), true);
+      }
+      const snippet = generateAdapterConfig(client, {
+        serverName: server_name,
+        command,
+        args
+      });
+      return textResult(JSON.stringify({ snippet }, null, 2));
+    }
+  );
+}
+
 async function buildSessionHandoff(
   workspace: Workspace,
   options: { sourceLimit: number; memoryLimit: number }
@@ -1123,6 +1455,19 @@ function textResult(text: string, isError = false) {
       }
     ],
     isError
+  };
+}
+
+function uninitializedWorkspacePayload(cwd: string) {
+  return {
+    error: "workspace_not_initialized",
+    initialized: false,
+    cwd,
+    next: [
+      "Run `kbx init --model minilm` in this project.",
+      "Run `kbx ingest` after initialization.",
+      "Use kbx_search_global to search already registered kbx workspaces."
+    ]
   };
 }
 

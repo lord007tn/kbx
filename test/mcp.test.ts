@@ -72,6 +72,7 @@ test("registerMcpTools exposes read, maintenance, and gated destructive tools", 
     "kbx_session_list",
     "kbx_session_record_event",
     "kbx_session_replay",
+    "kbx_session_search",
     "kbx_session_show",
     "kbx_watch_status"
   ].sort());
@@ -121,6 +122,56 @@ test("kbx mcp stdio supports search and reports validation errors", async () => 
   } finally {
     await client.close();
     await fixture.cleanup();
+  }
+});
+
+test("kbx mcp stdio starts outside initialized workspaces with bootstrap tools", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-mcp-bootstrap-"));
+  const client = new Client({ name: "kbx-test-client", version: "1.0.0" });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["--import", tsxLoaderUrl, cliPath, "mcp"],
+    cwd: root,
+    env: childEnv({
+      KBX_EMBEDDER: "hash",
+      KBX_HOME: path.join(root, ".home"),
+      KBX_MODEL_CACHE: path.join(root, ".models")
+    })
+  });
+  try {
+    await client.connect(transport);
+
+    const tools = await client.listTools();
+    const statusResponse = await client.callTool({
+      name: "kbx_index_status",
+      arguments: {}
+    });
+    const searchResponse = await client.callTool({
+      name: "kbx_search",
+      arguments: {
+        query: "anything"
+      }
+    });
+    const configResponse = await client.callTool({
+      name: "kbx_mcp_config",
+      arguments: {
+        client: "codex"
+      }
+    });
+    const status = JSON.parse(toolText(statusResponse)) as { initialized: boolean; error: string; cwd: string };
+    const config = JSON.parse(toolText(configResponse)) as { snippet: { content: string } };
+
+    assert.equal(tools.tools.some((tool) => tool.name === "kbx_search"), true);
+    assert.equal(tools.tools.some((tool) => tool.name === "kbx_search_global"), true);
+    assert.equal(status.initialized, false);
+    assert.equal(status.error, "workspace_not_initialized");
+    assert.equal(status.cwd, root);
+    assert.equal(searchResponse.isError, true);
+    assert.match(toolText(searchResponse), /workspace_not_initialized/);
+    assert.match(config.snippet.content, /\[mcp_servers\.kbx\]/);
+  } finally {
+    await client.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -660,11 +711,13 @@ test("kbx session MCP tools record, list, and replay events", async () => {
     });
     const listResponse = await callTool(server, "kbx_session_list", {});
     const eventsResponse = await callTool(server, "kbx_session_events", { session_id: "session-tools" });
+    const searchResponse = await callTool(server, "kbx_session_search", { query: "durable sessions" });
     const replayResponse = await callTool(server, "kbx_session_replay", { session_id: "session-tools" });
     const recordBody = JSON.parse(recordResponse.content[0]!.text) as { captured: boolean; event: { summary: string } };
     const checkpointBody = JSON.parse(checkpointResponse.content[0]!.text) as { checkpoint: { name: string } };
     const listBody = JSON.parse(listResponse.content[0]!.text) as { sessions: Array<{ id: string }> };
     const eventsBody = JSON.parse(eventsResponse.content[0]!.text) as { events: Array<{ summary: string }> };
+    const searchBody = JSON.parse(searchResponse.content[0]!.text) as { results: Array<{ session: { id: string } }> };
     const replayBody = JSON.parse(replayResponse.content[0]!.text) as { timeline: unknown[] };
 
     assert.equal(recordBody.captured, true);
@@ -672,6 +725,7 @@ test("kbx session MCP tools record, list, and replay events", async () => {
     assert.equal(checkpointBody.checkpoint.name, "ready");
     assert.equal(listBody.sessions.some((session) => session.id === "session-tools"), true);
     assert.equal(eventsBody.events.length, 2);
+    assert.equal(searchBody.results.some((hit) => hit.session.id === "session-tools"), true);
     assert.ok(replayBody.timeline.length >= 2);
   } finally {
     await fixture.cleanup();

@@ -2,7 +2,7 @@
   "mcpServers": {
     "kbx": {
       "command": "npx",
-      "args": ["-y", "kbx", "mcp"]
+      "args": ["-y", "@lord007tn/kbx", "mcp"]
     }
   }
 }

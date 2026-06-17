@@ -37,15 +37,15 @@ test("Claude Code plugin exposes MCP, hooks, command, and skill", async () => {
   const command = await readFile(path.join(pluginRoot, "commands", "kbx-status.md"), "utf8");
 
   assert.equal(manifest.name, "kbx");
-  assert.equal(manifest.version, "0.1.1");
+  assert.equal(manifest.version, "0.1.2");
   assert.equal(manifest.mcpServers, undefined);
   assert.equal(manifest.hooks, undefined);
   assert.deepEqual(mcp.mcpServers.kbx, {
     command: "npx",
-    args: ["-y", "kbx", "mcp"]
+    args: ["-y", "@lord007tn/kbx", "mcp"]
   });
   assert.equal(hooks.hooks.PostToolUse[0]!.matcher, "Write|Edit|MultiEdit");
-  assert.equal(hooks.hooks.PostToolUse[0]!.hooks[0]!.command, "npx -y kbx hook claude-code post-tool-use");
+  assert.equal(hooks.hooks.PostToolUse[0]!.hooks[0]!.command, "npx -y @lord007tn/kbx hook claude-code post-tool-use");
   assert.match(skill, /kbx_dev_report_add/);
   assert.match(command, /kbx workspace freshness/);
 });

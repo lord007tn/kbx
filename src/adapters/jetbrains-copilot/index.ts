@@ -8,7 +8,7 @@ export class JetBrainsCopilotAdapter extends BaseAdapter {
       clientName: "JetBrains Copilot",
       configPath: "Settings > Tools > GitHub Copilot > MCP",
       scope: "ide",
-      defaults: { command: "npx", args: ["-y", "kbx", "mcp"] },
+      defaults: { command: "npx", args: ["-y", "@lord007tn/kbx", "mcp"] },
       notes: [
         "JetBrains stores MCP registration in IDE settings; paste this server entry through the MCP settings UI."
       ]

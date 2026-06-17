@@ -53,6 +53,11 @@ export async function watchIngest(workspace: Workspace, target?: string, options
     console.error(`Watch error: ${error instanceof Error ? error.message : String(error)}`);
   });
 
+  await new Promise<void>((resolve, reject) => {
+    watcher.once("ready", resolve);
+    watcher.once("error", reject);
+  });
+
   console.log(`Watching ${watchTargets.length} path(s). Press Ctrl+C to stop.`);
 
   if (options.daemon === true) {

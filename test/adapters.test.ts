@@ -83,11 +83,11 @@ test("VS Code and JetBrains use servers JSON with npx defaults", () => {
 
   assert.deepEqual(vscode.servers.kbx, {
     command: "npx",
-    args: ["-y", "kbx", "mcp"]
+    args: ["-y", "@lord007tn/kbx", "mcp"]
   });
   assert.deepEqual(jetbrains.servers.kbx, {
     command: "npx",
-    args: ["-y", "kbx", "mcp"]
+    args: ["-y", "@lord007tn/kbx", "mcp"]
   });
 });
 

@@ -57,6 +57,56 @@ test("ChunkVectorStore upserts, searches, and deletes chunks", async () => {
   }
 });
 
+test("ChunkVectorStore uses zvec full-text and hybrid search", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kbx-vector-store-hybrid-"));
+  try {
+    const workspace = workspaceFromRoot(root);
+    await mkdir(workspace.kbxDir, { recursive: true });
+    const store = await ChunkVectorStore.open(workspace, 3);
+    try {
+      store.upsertChunks([
+        {
+          id: "semantic-0",
+          text: "generic semantic neighbor",
+          source: "semantic.md",
+          human_source: "semantic.md",
+          citation_source: "semantic.md",
+          source_origin: "workspace",
+          chunk_idx: 0,
+          mtime: 1,
+          tags: "",
+          embedding: [1, 0, 0]
+        },
+        {
+          id: "lexical-0",
+          text: "rare zvec full text token",
+          source: "lexical.md",
+          human_source: "lexical.md",
+          citation_source: "lexical.md",
+          source_origin: "workspace",
+          chunk_idx: 0,
+          mtime: 1,
+          tags: "",
+          embedding: [0, 1, 0]
+        }
+      ]);
+
+      const textHits = store.fullTextSearch("rare zvec token", 5);
+      const hybridHits = store.hybridSearch("rare zvec token", [1, 0, 0], 5);
+
+      assert.equal(textHits[0]?.source, "lexical.md");
+      assert.equal(textHits[0]?.match, "lexical");
+      assert.equal(hybridHits.some((hit) => hit.source === "lexical.md"), true);
+      assert.equal(hybridHits.some((hit) => hit.source === "semantic.md"), true);
+      assert.equal(hybridHits.every((hit) => hit.match === "hybrid"), true);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("ChunkVectorStore lists source chunks above scalar query limits", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kbx-vector-store-list-"));
   try {
