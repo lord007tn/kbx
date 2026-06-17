@@ -24,6 +24,8 @@ export async function watchIngest(workspace: Workspace, target?: string, options
   const watchTargets = target ? [target] : await sourceWatchTargets(workspace);
   const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
+    usePolling: process.platform === "win32",
+    interval: 250,
     ignored: [
       /(^|[\\/])\.git([\\/]|$)/,
       /(^|[\\/])node_modules([\\/]|$)/,
