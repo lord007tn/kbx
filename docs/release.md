@@ -4,7 +4,7 @@ This project publishes the `kbx` CLI as the npm package `@lord007tn/kbx` and cre
 
 ## Prerequisites
 
-- Node.js `>=20.19.0` for local development.
+- Node.js `>=22.12.0` for local development.
 - An npm automation or granular publish token saved in the GitHub repository as `NPM_TOKEN`.
 - The GitHub repository must be public for npm provenance to be attached during `npm publish --provenance`.
 - A clean release branch based on `main`.

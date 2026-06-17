@@ -25,7 +25,7 @@ npx -y @lord007tn/kbx ingest
 npx -y @lord007tn/kbx search "your query"
 ```
 
-Requires Node.js `>=20.19.0`. The npm/npx package is the supported distribution path for this alpha.
+Requires Node.js `>=22.12.0`. The npm/npx package is the supported distribution path for this alpha.
 
 ## Quick Smoke Test
 
