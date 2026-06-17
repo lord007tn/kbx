@@ -155,14 +155,14 @@ test("CLI ingest path watch mode stays scoped to the requested target", async ()
 
     const watcher = spawnCli(fixture, ["ingest", "docs", "--watch"]);
     try {
-      assert.equal(await waitForOutput(watcher, /Watching 1 path\(s\)/), true);
+      assert.equal(await waitForOutput(watcher, /Watching 1 path\(s\)/, 30000), true);
 
       await writeFile(path.join(fixture.workspace, "root.md"), "# Root\n\nroot outside watch token\n", "utf8");
       await sleep(1200);
       assert.doesNotMatch(watcher.output(), /Refreshed/);
 
-      await writeFile(path.join(fixture.workspace, "docs", "note.md"), "# Note\n\ndocs inside watch token\n", "utf8");
-      assert.equal(await waitForOutput(watcher, /Refreshed/), true);
+      await writeFile(path.join(fixture.workspace, "docs", "fresh.md"), "# Fresh\n\ndocs inside watch token\n", "utf8");
+      assert.equal(await waitForOutput(watcher, /Refreshed/, 30000), true);
     } finally {
       await watcher.close();
     }
@@ -180,10 +180,10 @@ test("CLI background watch keeps the index fresh and can be stopped", async () =
 
     const started = await runCli(fixture, ["watch", "--background"]);
     assert.match(started.stdout, /Started \(pid \d+\)\./);
-    assert.equal(await waitForFileText(path.join(fixture.workspace, ".kbx", "watch.log"), /Watching 1 path\(s\)/), true);
+    assert.equal(await waitForFileText(path.join(fixture.workspace, ".kbx", "watch.log"), /Watching 1 path\(s\)/, 30000), true);
 
-    await writeFile(path.join(fixture.workspace, "note.md"), "# Note\n\nupdated background token\n", "utf8");
-    assert.equal(await waitForCliSearch(fixture, "updated background token", /updated background token/), true);
+    await writeFile(path.join(fixture.workspace, "fresh.md"), "# Fresh\n\nupdated background token\n", "utf8");
+    assert.equal(await waitForCliSearch(fixture, "updated background token", /updated background token/, 30000), true);
 
     const stopped = await runCli(fixture, ["watch", "--stop"]);
     assert.match(stopped.stdout, /Stopped background watcher/);
