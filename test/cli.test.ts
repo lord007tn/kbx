@@ -396,9 +396,13 @@ async function waitForOutput(watcher: { output: () => string }, pattern: RegExp,
 async function waitForCliSearch(fixture: Fixture, query: string, pattern: RegExp, timeoutMs = 10000): Promise<boolean> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const result = await runCli(fixture, ["search", query, "-k", "1"]);
-    if (pattern.test(result.stdout)) {
-      return true;
+    try {
+      const result = await runCli(fixture, ["search", query, "-k", "1"]);
+      if (pattern.test(result.stdout)) {
+        return true;
+      }
+    } catch {
+      // The background watcher can briefly swap the vector collection while refreshing.
     }
     await sleep(250);
   }
