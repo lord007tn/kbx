@@ -15,4 +15,4 @@ Install through the local marketplace:
 /plugin install kbx@kbx-tools
 ```
 
-The plugin runs `npx -y kbx mcp`, so Node.js must be available and the `kbx` npm package must be reachable or installed in your environment.
+The plugin runs `npx -y @lord007tn/kbx mcp`, so Node.js must be available and the `@lord007tn/kbx` npm package must be reachable or installed in your environment.

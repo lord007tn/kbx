@@ -40,6 +40,8 @@ Use `kbx_dev_report_add` only when the user has opted in with `dev.report=enable
 
 Durable session capture is opt-in. Use `sessions.capture=metadata` for tool/event summaries and `sessions.capture=full` only when the user wants local raw payload capture. The session event store is separate from the search index and lives under `.kbx/sessions.db`.
 
+Use `kbx_session_search` to search captured session events by summary, tool, affected files, optional stored payload text, session name, and client. Set `global=true` to search session stores across registered workspaces, and use `client="codex"` or `client="claude-code"` when you need one assistant's captured sessions.
+
 Use `kbx_session_record_event` for explicit event capture, `kbx_session_checkpoint` for named progress markers, and `kbx_session_replay` for read-only timelines. Use `kbx_rewind_preview` before any rollback; `kbx_rewind_apply` is destructive and requires both `mcp.destructive_tools=enabled` and the exact preview token.
 
 ## Hook Support

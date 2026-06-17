@@ -28,6 +28,8 @@ import {
   listSessions,
   previewSessionRewind,
   pruneSessions,
+  searchRegisteredSessions,
+  searchSessions,
   sessionTimeline,
   startSession,
   type SessionEventType
@@ -591,9 +593,11 @@ Tools:
   kbx_search, kbx_list_sources, kbx_get_chunk, kbx_index_status
 `)
   .action(async () => {
-    const workspace = await requireWorkspace();
-    await maybeStartConfiguredWatch(workspace, { silent: true });
-    await runMcpServer(workspace);
+    const workspace = await findWorkspace(process.cwd());
+    if (workspace) {
+      await maybeStartConfiguredWatch(workspace, { silent: true });
+    }
+    await runMcpServer(workspace, process.cwd());
   });
 
 mcpCommand
@@ -1403,6 +1407,65 @@ sessionCommand
     }
     for (const event of events) {
       console.log(`${String(event.seq).padStart(4)}  ${event.timestamp}  ${event.type.padEnd(10)}  ${event.summary}`);
+    }
+  });
+
+sessionCommand
+  .command("search")
+  .description("Search captured durable session events.")
+  .argument("<query>", "session search query")
+  .option("--global", "search sessions across all registered workspaces")
+  .option("--client <client>", "filter by client name, such as codex or claude-code")
+  .option("--include-payloads", "include stored input/output payloads in JSON output")
+  .option("--json", "output structured JSON")
+  .option("--limit <number>", "maximum results to print", parsePositiveInteger, 20)
+  .action(async (query: string, options: {
+    global?: boolean;
+    client?: string;
+    includePayloads?: boolean;
+    json?: boolean;
+    limit: number;
+  }) => {
+    const searchOptions = {
+      limit: options.limit,
+      client: options.client,
+      includePayloads: options.includePayloads === true
+    };
+
+    if (options.global === true) {
+      const hits = await searchRegisteredSessions(query, searchOptions);
+      if (options.json === true) {
+        console.log(JSON.stringify({ query, global: true, results: hits }, null, 2));
+        return;
+      }
+      if (hits.length === 0) {
+        console.log("No session results.");
+        return;
+      }
+      for (const [index, hit] of hits.entries()) {
+        const label = hit.session.name ?? hit.session.client ?? hit.session.id.slice(0, 8);
+        console.log(`${index + 1}. [${hit.workspace.name}] ${hit.session.id.slice(0, 8)}#${hit.event.seq} ${hit.event.timestamp} ${label} (${hit.event.type})`);
+        console.log(indent(excerpt(hit.preview)));
+        console.log("");
+      }
+      return;
+    }
+
+    const workspace = await requireWorkspace();
+    const hits = await searchSessions(workspace, query, searchOptions);
+    if (options.json === true) {
+      console.log(JSON.stringify({ query, results: hits }, null, 2));
+      return;
+    }
+    if (hits.length === 0) {
+      console.log("No session results.");
+      return;
+    }
+    for (const [index, hit] of hits.entries()) {
+      const label = hit.session.name ?? hit.session.client ?? hit.session.id.slice(0, 8);
+      console.log(`${index + 1}. ${hit.session.id.slice(0, 8)}#${hit.event.seq} ${hit.event.timestamp} ${label} (${hit.event.type})`);
+      console.log(indent(excerpt(hit.preview)));
+      console.log("");
     }
   });
 

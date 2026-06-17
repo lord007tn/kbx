@@ -8,7 +8,7 @@ export class VSCodeCopilotAdapter extends BaseAdapter {
       clientName: "VS Code Copilot",
       configPath: ".vscode/mcp.json",
       scope: "project",
-      defaults: { command: "npx", args: ["-y", "kbx", "mcp"] }
+      defaults: { command: "npx", args: ["-y", "@lord007tn/kbx", "mcp"] }
     });
   }
 

@@ -50,9 +50,9 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   }
 
   const store = await ChunkVectorStore.open(workspace, manifest.dim, { readOnly: true });
-  let rawVectorHits: SearchHit[];
+  let rawHybridHits: SearchHit[];
   try {
-    rawVectorHits = store.search(queryEmbedding, Math.max(topK * 12, 50));
+    rawHybridHits = store.hybridSearch(query, queryEmbedding, Math.max(topK * 12, 50));
   } finally {
     store.close();
   }
@@ -62,7 +62,7 @@ export async function searchWorkspace(workspace: Workspace, query: string, topK:
   let lexicalHits: SearchHit[];
   let graphHits: SearchHit[] = [];
   try {
-    vectorHits = expandVectorHits(lexical, rawVectorHits, branchScope, filterToBranch, Math.max(topK * 4, 20));
+    vectorHits = expandVectorHits(lexical, rawHybridHits, branchScope, filterToBranch, Math.max(topK * 4, 20));
     lexicalHits = branchFilter(lexical.search(query, Math.max(topK * 12, 50)), branchScope, filterToBranch);
     if (options.graph?.enabled === true) {
       graphHits = branchFilter(
@@ -102,7 +102,7 @@ function expandVectorHits(
       ...alias,
       score: hit.score,
       snippet: undefined,
-      match: "vector" as const
+      match: hit.match
     })));
     if (expanded.length >= limit) {
       break;
@@ -206,7 +206,7 @@ async function fuseHits(query: string, vectorHits: SearchHit[], lexicalHits: Sea
       ...(existing ?? hit),
       snippet: existing?.snippet ?? hit.snippet,
       score: Math.max(existing?.score ?? 0, hit.score),
-      match: combineMatch(existing?.match, "vector"),
+      match: combineMatch(existing?.match, hit.match),
       fusionScore
     });
   }

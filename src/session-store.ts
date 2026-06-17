@@ -1,11 +1,11 @@
 import { createId } from "@paralleldrive/cuid2";
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { currentBranchContext } from "./branch";
-import type { WorkspaceConfig } from "./types";
-import { loadConfig, loadManifest, type Workspace } from "./workspace";
+import type { RegistryEntry, WorkspaceConfig } from "./types";
+import { loadConfig, loadManifest, loadRegistry, type Workspace, workspaceFromRoot } from "./workspace";
 
 const SESSION_SCHEMA_VERSION = 1;
 
@@ -52,6 +52,27 @@ export interface SessionFileSnapshot {
   path: string;
   before_text: string | null;
   after_text: string | null;
+}
+
+export interface SessionSearchOptions {
+  limit?: number;
+  client?: string;
+  includePayloads?: boolean;
+}
+
+export interface SessionSearchHit {
+  session: SessionRecord;
+  event: SessionEventRecord;
+  score: number;
+  preview: string;
+}
+
+export interface GlobalSessionSearchHit extends SessionSearchHit {
+  workspace: {
+    id: string;
+    name: string;
+    path: string;
+  };
 }
 
 export interface StartSessionOptions {
@@ -234,6 +255,157 @@ export async function listSessionEvents(workspace: Workspace, sessionId: string,
   } finally {
     db.close();
   }
+}
+
+export async function searchSessions(workspace: Workspace, query: string, options: SessionSearchOptions = {}): Promise<SessionSearchHit[]> {
+  const terms = queryTerms(query);
+  const limit = Math.max(1, Math.min(options.limit ?? 20, 200));
+  if (terms.length === 0 || !await exists(workspace.sessionPath)) {
+    return [];
+  }
+
+  const db = openSessionDb(workspace);
+  try {
+    const candidateLimit = Math.max(limit * 8, 100);
+    const where = terms.map((_term, index) => `search_text LIKE @term${index} ESCAPE '\\'`).join(" AND ");
+    const params = Object.fromEntries(terms.map((term, index) => [`term${index}`, `%${escapeSqlLike(term)}%`]));
+    const rows = db.prepare(`
+      WITH event_text AS (
+        SELECT
+          e.id AS event_id,
+          e.session_id,
+          e.seq,
+          e.timestamp,
+          e.type,
+          e.tool_name,
+          e.summary,
+          e.input_json,
+          e.output_json,
+          e.error,
+          e.redacted,
+          e.truncated,
+          s.id,
+          s.workspace_id,
+          s.name,
+          s.client,
+          s.cwd,
+          s.branch_name,
+          s.branch_scope,
+          s.git_head,
+          s.started_at,
+          s.ended_at,
+          s.status,
+          (
+            COALESCE(s.name, '') || ' ' ||
+            COALESCE(s.client, '') || ' ' ||
+            COALESCE(s.cwd, '') || ' ' ||
+            COALESCE(s.branch_name, '') || ' ' ||
+            COALESCE(e.type, '') || ' ' ||
+            COALESCE(e.tool_name, '') || ' ' ||
+            COALESCE(e.summary, '') || ' ' ||
+            COALESCE(e.error, '') || ' ' ||
+            COALESCE((
+              SELECT group_concat(f.path || ' ' || f.operation, ' ')
+              FROM session_event_files f
+              WHERE f.event_id = e.id
+            ), '') || ' ' ||
+            COALESCE((
+              SELECT group_concat(fs.path, ' ')
+              FROM session_file_snapshots fs
+              WHERE fs.event_id = e.id
+            ), '')
+          ) AS display_text,
+          (
+            COALESCE(s.name, '') || ' ' ||
+            COALESCE(s.client, '') || ' ' ||
+            COALESCE(s.cwd, '') || ' ' ||
+            COALESCE(s.branch_name, '') || ' ' ||
+            COALESCE(e.type, '') || ' ' ||
+            COALESCE(e.tool_name, '') || ' ' ||
+            COALESCE(e.summary, '') || ' ' ||
+            COALESCE(e.error, '') || ' ' ||
+            COALESCE((
+              SELECT group_concat(f.path || ' ' || f.operation, ' ')
+              FROM session_event_files f
+              WHERE f.event_id = e.id
+            ), '') || ' ' ||
+            COALESCE((
+              SELECT group_concat(fs.path, ' ')
+              FROM session_file_snapshots fs
+              WHERE fs.event_id = e.id
+            ), '') || ' ' ||
+            COALESCE(e.input_json, '') || ' ' ||
+            COALESCE(e.output_json, '')
+          ) AS search_text
+        FROM session_events e
+        JOIN sessions s ON s.id = e.session_id
+        WHERE (@client IS NULL OR s.client = @client)
+      )
+      SELECT *
+      FROM event_text
+      WHERE ${where}
+      ORDER BY timestamp DESC, seq DESC
+      LIMIT @candidateLimit
+    `).all({
+      ...params,
+      client: options.client ?? null,
+      candidateLimit
+    }) as Array<SessionEventRow & SessionRow & { event_id: string; display_text: string; search_text: string }>;
+
+    const hits = rows.map((row) => {
+      const event = hydrateEvent(db, {
+        id: row.event_id,
+        session_id: row.session_id,
+        seq: row.seq,
+        timestamp: row.timestamp,
+        type: row.type,
+        tool_name: row.tool_name,
+        summary: row.summary,
+        input_json: options.includePayloads === true ? row.input_json : null,
+        output_json: options.includePayloads === true ? row.output_json : null,
+        error: row.error,
+        redacted: row.redacted,
+        truncated: row.truncated
+      });
+      return {
+        session: rowToSession(row)!,
+        event,
+        score: scoreSessionEvent(row.search_text, terms, row),
+        preview: sessionSearchPreview(options.includePayloads === true ? row.search_text : row.display_text, terms)
+      };
+    });
+
+    return hits
+      .sort((a, b) => b.score - a.score || b.event.timestamp.localeCompare(a.event.timestamp) || b.event.seq - a.event.seq)
+      .slice(0, limit);
+  } finally {
+    db.close();
+  }
+}
+
+export async function searchRegisteredSessions(query: string, options: SessionSearchOptions = {}): Promise<GlobalSessionSearchHit[]> {
+  const hits: GlobalSessionSearchHit[] = [];
+  for (const entry of await loadRegistry()) {
+    const workspace = workspaceFromRoot(entry.path);
+    if (!await exists(workspace.sessionPath)) {
+      continue;
+    }
+
+    try {
+      const workspaceHits = await searchSessions(workspace, query, options);
+      hits.push(...workspaceHits.map((hit) => ({
+        ...hit,
+        workspace: registryWorkspace(entry)
+      })));
+    } catch {
+      // Session search should continue when one registered workspace has a stale or incompatible DB.
+    }
+  }
+
+  const limit = Math.max(1, Math.min(options.limit ?? 20, 200));
+  return hits
+    .sort((a, b) => b.score - a.score || b.event.timestamp.localeCompare(a.event.timestamp) || a.workspace.name.localeCompare(b.workspace.name))
+    .slice(0, limit);
 }
 
 export async function addSessionCheckpoint(
@@ -690,6 +862,80 @@ function safeWorkspacePath(workspace: Workspace, filePath: string): string {
     throw new Error(`Refusing to rewind kbx internal path: ${filePath}`);
   }
   return absolutePath;
+}
+
+function queryTerms(query: string): string[] {
+  const terms = query.toLowerCase().match(/[a-z0-9_./:-]+/g) ?? [];
+  return [...new Set(terms)].slice(0, 12);
+}
+
+function escapeSqlLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function scoreSessionEvent(
+  searchText: string,
+  terms: string[],
+  row: Pick<SessionEventRow, "summary" | "tool_name" | "error"> & Pick<SessionRow, "name" | "client">
+): number {
+  const haystack = searchText.toLowerCase();
+  const matches = terms.reduce((total, term) => total + occurrences(haystack, term), 0);
+  const summary = row.summary.toLowerCase();
+  const sessionName = row.name?.toLowerCase() ?? "";
+  const toolName = row.tool_name?.toLowerCase() ?? "";
+  const client = row.client?.toLowerCase() ?? "";
+  const focusedMatches = terms.reduce((total, term) => {
+    return total
+      + (summary.includes(term) ? 5 : 0)
+      + (sessionName.includes(term) ? 3 : 0)
+      + (toolName.includes(term) ? 2 : 0)
+      + (client.includes(term) ? 2 : 0);
+  }, 0);
+  return matches + focusedMatches + (row.error ? 0.5 : 0);
+}
+
+function occurrences(value: string, term: string): number {
+  if (term.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  let index = value.indexOf(term);
+  while (index !== -1) {
+    count += 1;
+    index = value.indexOf(term, index + term.length);
+  }
+  return count;
+}
+
+function sessionSearchPreview(searchText: string, terms: string[], maxChars = 320): string {
+  const compact = searchText.replace(/\s+/g, " ").trim();
+  const lower = compact.toLowerCase();
+  const firstMatch = terms
+    .map((term) => lower.indexOf(term))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0] ?? 0;
+  const start = Math.max(0, firstMatch - 80);
+  const end = Math.min(compact.length, start + maxChars);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < compact.length ? "..." : "";
+  return `${prefix}${compact.slice(start, end)}${suffix}`;
+}
+
+function registryWorkspace(entry: RegistryEntry): GlobalSessionSearchHit["workspace"] {
+  return {
+    id: entry.workspace_id,
+    name: entry.name,
+    path: entry.path
+  };
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isMissingFileError(error: unknown): boolean {
