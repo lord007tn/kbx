@@ -1,6 +1,6 @@
 {
   "name": "@lord007tn/kbx",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first knowledge base CLI for searchable AI context.",
   "license": "MIT",
   "keywords": [
@@ -52,7 +52,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@paralleldrive/cuid2": "^3.3.0",
-    "@zvec/zvec": "^0.3.2",
+    "@zvec/zvec": "^0.5.0",
     "better-sqlite3": "^12.9.0",
     "chokidar": "^5.0.0",
     "commander": "^14.0.3",

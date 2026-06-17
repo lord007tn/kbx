@@ -84,6 +84,7 @@ kbx memory list
 kbx memory prune
 kbx config set sessions.capture full
 kbx session start --client codex --name "implementation session"
+kbx session search "cross thread retrieval" --global --client codex
 kbx session replay <session-id>
 kbx graph build
 kbx graph query "startSession"
@@ -204,6 +205,7 @@ Tools exposed:
 - `kbx_session_list`
 - `kbx_session_show`
 - `kbx_session_events`
+- `kbx_session_search`
 - `kbx_session_record_event`
 - `kbx_session_checkpoint`
 - `kbx_session_replay`
@@ -226,7 +228,7 @@ Tools exposed:
 
 `kbx_file_context` returns indexed context and retained memories linked to specific files for active edit or review work. Active search and file context omit superseded retained notes by default; pass `--include-superseded-memories` in the CLI or `include_superseded_memories=true` in MCP when auditing memory history. `kbx_inspect` returns a read-only local summary of sources, freshness, retained-memory counts, graph status, and recent indexed files.
 
-`kbx_session_handoff` returns a compact workspace/index summary for session start or handoff. Durable session capture is opt-in through `sessions.capture`; session events, checkpoints, and rewind snapshots are stored in `.kbx/sessions.db`. `kbx_memory_add` lets an agent save explicit compact decisions, preferences, architecture notes, bug lessons, workflows, facts, handoffs, or events with a required retention period. Retained notes support typed metadata, relevant files, tags, supporting chunk IDs, supersession links, and deterministic retention scores; when a new note supersedes an older one, the old note is marked as not latest rather than deleted. `kbx_memory_verify` checks whether a retained note's supporting chunk IDs still resolve to indexed source context, and `kbx_memory_history` returns the supersession chain for audit workflows. Retained notes are stored under `.kbx/sessions` and become searchable after indexing.
+`kbx_session_handoff` returns a compact workspace/index summary for session start or handoff. Durable session capture is opt-in through `sessions.capture`; session events, checkpoints, and rewind snapshots are stored in `.kbx/sessions.db`. `kbx session search` and `kbx_session_search` search captured session events by summary, tool, affected file, optional stored payload text, session name, and client. Pass `--global` or `global=true` to search session stores across all registered workspaces, including captured Codex and Claude Code sessions. `kbx_memory_add` lets an agent save explicit compact decisions, preferences, architecture notes, bug lessons, workflows, facts, handoffs, or events with a required retention period. Retained notes support typed metadata, relevant files, tags, supporting chunk IDs, supersession links, and deterministic retention scores; when a new note supersedes an older one, the old note is marked as not latest rather than deleted. `kbx_memory_verify` checks whether a retained note's supporting chunk IDs still resolve to indexed source context, and `kbx_memory_history` returns the supersession chain for audit workflows. Retained notes are stored under `.kbx/sessions` and become searchable after indexing.
 
 CLI equivalents are available for local inspection:
 
@@ -300,8 +302,8 @@ Implemented:
 - root `.kbxignore` support in addition to `.gitignore`
 - Git branch-scoped workspace indexing, branch-aware search defaults, and vector storage dedupe for identical chunk content
 - heading-aware Markdown, fixed text/code, and sentence chunking
-- Zvec-backed local vector collection
-- hybrid vector and SQLite FTS5 lexical retrieval
+- Zvec v0.5-backed local vector collection with text FTS indexes, projected query/fetch fields, and DiskANN on supported Linux x64 hosts with HNSW fallback
+- hybrid zvec dense+FTS multi-query retrieval plus SQLite FTS5 lexical retrieval
 - deterministic retrieval enhancers with post-fusion reranking and query-centered snippets
 - built-in local reranker mode plus optional external command reranker
 - Transformers.js embeddings with a hash test embedder

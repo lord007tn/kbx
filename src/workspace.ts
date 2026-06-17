@@ -83,7 +83,7 @@ export async function findWorkspace(startDir = process.cwd()): Promise<Workspace
 
   while (true) {
     const workspace = workspaceFromRoot(current);
-    if (await exists(workspace.kbxDir)) {
+    if (await exists(workspace.manifestPath)) {
       return workspace;
     }
 

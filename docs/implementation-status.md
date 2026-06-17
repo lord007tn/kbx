@@ -20,11 +20,11 @@ This document records what is already present in the current `kbx` codebase so t
 - Session rewind preview/apply from captured file snapshots with exact confirmation tokens.
 - Deterministic graph knowledge store under `.kbx/graph.db`, rebuilt from indexed chunks with file, heading, symbol, package dependency, and retained-memory nodes.
 - Heading-aware Markdown chunking, fixed text/code chunking, and sentence chunking.
-- Zvec-backed local vector store with per-file delete and upsert.
+- Zvec v0.5-backed local vector store with per-file delete/upsert, FTS indexes on chunk text, native multi-query hybrid retrieval, output field selection for query/fetch, and DiskANN creation on supported Linux x64 hosts with HNSW fallback when DiskANN is unavailable.
 - Transformers.js embedding pipeline with a deterministic hash embedder for tests.
 - Embedding model catalog with install status, benchmark cache, offline model loading, and model switch reindex flow.
 - Persistent SQLite lexical index stored under `.kbx/lexical.db` with FTS5 unicode and trigram indexes.
-- Hybrid baseline search that combines vector results with SQLite lexical/BM25 matches, with opt-in graph-expanded candidates after graph build.
+- Hybrid baseline search that combines zvec dense+FTS multi-query results with SQLite lexical/BM25 matches, with opt-in graph-expanded candidates after graph build.
 - Deterministic retrieval enhancers: exact phrase/source boosts, proximity scoring, post-fusion reranking, and query-centered snippets.
 - Optional Transformers.js model reranker and external command reranker contract for heavier model-based or LLM reranking experiments; disabled by default.
 - Built-in local reranker mode for deterministic phrase, source, proximity, and match-type ordering.
@@ -39,10 +39,10 @@ This document records what is already present in the current `kbx` codebase so t
 - Root `.kbxignore` support in addition to `.gitignore`.
 - Git branch-scoped workspace indexing with current-branch search filtering and vector storage dedupe for identical chunk content.
 - Session memory commands: `kbx memory add`, `kbx memory list`, `kbx memory verify`, `kbx memory history`, and `kbx memory prune`.
-- Durable session commands: `kbx session start`, `record`, `checkpoint`, `replay`, `events`, `end`, and `prune`.
+- Durable session commands: `kbx session start`, `record`, `checkpoint`, `replay`, `events`, `search`, `end`, and `prune`.
 - Rewind commands: `kbx rewind preview` and `kbx rewind apply`.
 - Graph commands: `kbx graph build`, `kbx graph query`, and `kbx graph stats`.
-- Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, `kbx_file_context`, `kbx_inspect`, `kbx_agent_guide`, `kbx_memory_list`, `kbx_memory_verify`, `kbx_memory_history`, `kbx_session_handoff`, `kbx_session_list`, `kbx_session_show`, `kbx_session_events`, `kbx_session_replay`, `kbx_rewind_preview`, `kbx_graph_query`, and `kbx_graph_stats`. `kbx_search` supports compact results plus ID-based expansion.
+- Stdio MCP server with read tools: `kbx_search`, `kbx_search_global`, `kbx_search_many`, `kbx_list_sources`, `kbx_get_chunk`, `kbx_index_status`, `kbx_file_context`, `kbx_inspect`, `kbx_agent_guide`, `kbx_memory_list`, `kbx_memory_verify`, `kbx_memory_history`, `kbx_session_handoff`, `kbx_session_list`, `kbx_session_show`, `kbx_session_events`, `kbx_session_search`, `kbx_session_replay`, `kbx_rewind_preview`, `kbx_graph_query`, and `kbx_graph_stats`. `kbx_search` supports compact results plus ID-based expansion.
 - MCP retained-memory write tool: `kbx_memory_add`, which saves explicit compact notes with required retention and indexes them as session-memory sources.
 - MCP durable-session write tools: `kbx_session_record_event` and `kbx_session_checkpoint`.
 - MCP graph rebuild tool: `kbx_graph_build`.
