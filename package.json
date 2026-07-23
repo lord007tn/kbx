@@ -53,7 +53,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@paralleldrive/cuid2": "^3.3.0",
     "@zvec/zvec": "^0.5.0",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "^13.0.1",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "fast-glob": "^3.3.3",
