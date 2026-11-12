@@ -52,7 +52,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@paralleldrive/cuid2": "^3.3.0",
-    "@zvec/zvec": "^0.5.0",
+    "@zvec/zvec": "^0.6.0",
     "better-sqlite3": "^12.9.0",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
